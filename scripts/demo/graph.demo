@@ -1,0 +1,21 @@
+# The commit graph, laid out the way `git tree` lays it out.
+cols 100
+rows 30
+speed 0.06
+
+wait 1.4
+type 3
+wait 3.5
+
+# Branches and tags are chips, coloured the way git colours them.
+key Down
+wait 1.2
+key Down
+wait 1.2
+key Down
+wait 2.5
+
+# The lanes fork at the merge and rejoin above it.
+key Down
+key Down
+wait 3.0

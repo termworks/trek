@@ -1,0 +1,42 @@
+# The file tree: two ways to move, and the shortcut list.
+cols 100
+rows 30
+speed 0.06
+
+wait 1.6
+
+# Folders unfold where they stand, with guides showing the nesting.
+key Down
+key Enter
+wait 1.4
+key Down
+key Enter
+wait 2.0
+key Down
+key Down
+wait 1.2
+
+# `a` switches to explorer mode: one directory at a time, and the header becomes the path.
+type a
+wait 2.2
+key Down
+key Enter
+wait 2.0
+
+# Going up lands on the folder you came from, not back at the top.
+key Left
+wait 2.2
+key Enter
+wait 2.0
+key Left
+wait 1.6
+
+# `.` shows dotfiles; `?` is the shortcut list.
+type .
+wait 1.8
+type .
+wait 1.0
+type ?
+wait 3.0
+type ?
+wait 1.0

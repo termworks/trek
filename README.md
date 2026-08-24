@@ -75,6 +75,9 @@ row. Keyboard navigation brings the selection back into view.
 
 ### Two ways to move
 
+<!-- demo:explorer -->
+<!-- /demo:explorer -->
+
 **Tree mode** is the default: a directory unfolds where it stands, with indent
 guides showing the nesting, and the root never changes.
 
@@ -145,6 +148,12 @@ oslo.register_builtin{
 
 The file is written on every exit path, and is left untouched when trek cannot
 start — so a caller that reads an empty or missing file should simply not move.
+<!-- demo:changes -->
+<!-- /demo:changes -->
+
+<!-- demo:graph -->
+<!-- /demo:graph -->
+
 
 The Explorer menu can create, rename, delete, and copy paths, change the root,
 and stage changes without crossing nested-repository boundaries. The Changes

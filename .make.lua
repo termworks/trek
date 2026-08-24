@@ -368,3 +368,41 @@ make.recipe{ name = "uninstall", desc = "take it back out of $PREFIX/bin",
 make.recipe{ name = "verify", desc = "the whole local gate",
              deps = { "fmt-check", "check", "test", "smoke" } }
 make.alias("v", "verify")
+
+------------------------------------------------------------------------- demos
+
+-- asciinema recordings for the README. Headless: asciinema owns the pty, tmux renders trek into
+-- it, and the recorder sends keys from outside -- so this runs over ssh exactly as it runs here.
+make.recipe{
+  name = "demo",
+  desc = "record the asciinema casts: --only <slug> for one",
+  deps = { "build" },
+  params = { { "--only", desc = "record just this demo" } },
+  run = function(a)
+    need("asciinema", "asciinema is not installed; install it first")
+    need("tmux", "tmux is not installed; install it first")
+    local names = {}
+    if a.only then
+      names[1] = "scripts/demo/" .. a.only .. ".demo"
+      assert(oslo.fs.stat(names[1]), "no such demo: " .. a.only)
+    else
+      names = oslo.fs.glob("scripts/demo/*.demo")
+      table.sort(names)
+    end
+    assert(#names > 0, "no demo scripts in scripts/demo/")
+    for _, demo in ipairs(names) do
+      print(oslo.ui.style(oslo.path.name(demo), { bold = true }))
+      sh["./scripts/demo/record.sh"](demo)
+    end
+  end,
+}
+
+make.recipe{
+  name = "demo-publish",
+  desc = "upload the casts and write them into the README",
+  run = function(a)
+    need("asciinema", "asciinema is not installed; install it first")
+    sh["./scripts/demo/publish.sh"]()
+    sh["./scripts/demo/embed.sh"]()
+  end,
+}
