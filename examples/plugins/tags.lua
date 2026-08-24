@@ -12,7 +12,7 @@ local function git(ctx, ...)
 end
 
 trek.tab("tags", {
-  icon = "",
+  icon = "\u{f02b}",
   title = "Tags",
 
   -- `when` runs on root changes, so it may ask git. The first answer is nil -- the
