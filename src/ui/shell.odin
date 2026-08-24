@@ -11,8 +11,8 @@ import tui "../tui"
 // The activity bar is a column down the left edge, VS Code style. Each tab owns a
 // slot ACTIVITY_SLOT rows tall with its glyph on the middle row, so the icons read
 // as a spaced column rather than a stack.
-ACTIVITY_WIDTH :: 5
-ACTIVITY_SLOT :: 3
+ACTIVITY_WIDTH :: 4
+ACTIVITY_SLOT :: 2
 // One blank column between the activity strip and the content, so rows do not butt
 // straight against the bar.
 CONTENT_GUTTER :: 1
@@ -512,31 +512,29 @@ shell_activity_bounds :: proc(shell: ^Shell, target, height: int) -> (int, int) 
 // One slot. The active tab lights its whole middle row with the selection colour and
 // caps it above and below with half blocks drawn in that same colour, so the
 // highlight reads as a capsule around the icon rather than a hard rectangle.
-shell_draw_slot :: proc(shell: ^Shell, buffer: ^tui.Buffer, top: int, icon: string, active, hovered: bool) {
-	bar := tui.Style{bg = tui.ACTIVITY_BG}
-	highlight := active ? tui.ACTIVITY_ACTIVE_BG : tui.HOVER_BG
-	middle := top + ACTIVITY_SLOT / 2
-	for y in top ..< min(top + ACTIVITY_SLOT, buffer.height) {
-		for x in 0 ..< ACTIVITY_WIDTH {
-			cell := tui.Cell{rune = ' ', style = bar}
-			if active || hovered {
-				switch {
-				case y == middle:
-					cell.style = tui.Style{bg = highlight}
-				case y == middle - 1:
-					cell = tui.Cell{rune = '▄', style = tui.Style{fg = highlight, bg = tui.ACTIVITY_BG}}
-				case y == middle + 1:
-					cell = tui.Cell{rune = '▀', style = tui.Style{fg = highlight, bg = tui.ACTIVITY_BG}}
-				}
-			}
-			tui.buffer_set(buffer, x, y, cell)
+// The icon on its slot's middle row, dim unless this tab is the active one.
+shell_draw_icon :: proc(buffer: ^tui.Buffer, middle: int, icon: string, style: tui.Style) {
+	if middle < 0 || middle >= buffer.height do return
+	x := max((ACTIVITY_WIDTH - tui.text_width(icon)) / 2, 0)
+	tui.buffer_draw_text(buffer, x, middle, icon, style, ACTIVITY_WIDTH - x)
+}
+
+// The lit capsule: a full row under the icon, capped above and below by half blocks
+// in the same colour. At this slot height the caps land on the neighbouring slots'
+// blank rows, so it is drawn as an overlay after every slot has its icon.
+shell_draw_capsule :: proc(buffer: ^tui.Buffer, middle: int, icon: string, colour: tui.Color) {
+	for x in 0 ..< ACTIVITY_WIDTH {
+		if middle - 1 >= 0 {
+			tui.buffer_set(buffer, x, middle - 1, tui.Cell{rune = '▄', style = tui.Style{fg = colour, bg = tui.ACTIVITY_BG}})
+		}
+		if middle >= 0 && middle < buffer.height {
+			tui.buffer_set(buffer, x, middle, tui.Cell{rune = ' ', style = tui.Style{bg = colour}})
+		}
+		if middle + 1 < buffer.height {
+			tui.buffer_set(buffer, x, middle + 1, tui.Cell{rune = '▀', style = tui.Style{fg = colour, bg = tui.ACTIVITY_BG}})
 		}
 	}
-	if middle >= buffer.height do return
-	glyph := tui.Style{fg = active ? tui.RAMP_BRIGHT : tui.RAMP_MUTED, bg = active || hovered ? highlight : tui.ACTIVITY_BG}
-	if !active && !hovered do glyph.attrs = {.Dim}
-	x := max((ACTIVITY_WIDTH - tui.text_width(icon)) / 2, 0)
-	tui.buffer_draw_text(buffer, x, middle, icon, glyph, ACTIVITY_WIDTH - x)
+	shell_draw_icon(buffer, middle, icon, tui.Style{fg = tui.RAMP_BRIGHT, bg = colour})
 }
 
 shell_draw_activity :: proc(shell: ^Shell, buffer: ^tui.Buffer) {
@@ -544,7 +542,17 @@ shell_draw_activity :: proc(shell: ^Shell, buffer: ^tui.Buffer) {
 	for _, index in shell.tabs {
 		top, _ := shell_activity_bounds(shell, index, buffer.height)
 		if top >= buffer.height do break
-		shell_draw_slot(shell, buffer, top, shell_tab_icon(shell, index), index == shell.active, index == shell.hover_tab)
+		if index == shell.active || index == shell.hover_tab do continue
+		style := tui.Style{fg = tui.RAMP_MUTED, bg = tui.ACTIVITY_BG, attrs = {.Dim}}
+		shell_draw_icon(buffer, top + ACTIVITY_SLOT / 2, shell_tab_icon(shell, index), style)
+	}
+	if shell.hover_tab >= 0 && shell.hover_tab != shell.active {
+		top, _ := shell_activity_bounds(shell, shell.hover_tab, buffer.height)
+		shell_draw_capsule(buffer, top + ACTIVITY_SLOT / 2, shell_tab_icon(shell, shell.hover_tab), tui.HOVER_BG)
+	}
+	if shell.active >= 0 && shell.active < len(shell.tabs) {
+		top, _ := shell_activity_bounds(shell, shell.active, buffer.height)
+		shell_draw_capsule(buffer, top + ACTIVITY_SLOT / 2, shell_tab_icon(shell, shell.active), tui.ACTIVITY_ACTIVE_BG)
 	}
 }
 
