@@ -179,12 +179,29 @@ make.recipe{
 local SRC = "src"
 local BIN = "target/" .. NAME
 
+local function packages(pattern)
+  local found = oslo.run{ "find", SRC, "-type", "f", "-name", pattern,
+                          "-printf", "%h\n", capture = true }
+  assert(found.ok, "could not enumerate Odin packages")
+  local dirs = {}
+  local seen = {}
+  for dir in (found.out or ""):gmatch("[^\n]+") do
+    if not seen[dir] then
+      dirs[#dirs + 1] = dir
+      seen[dir] = true
+    end
+  end
+  table.sort(dirs)
+  return dirs
+end
+
 make.recipe{
   name = "build",
   desc = "the binary",
   run = function()
     sh.mkdir("-p", "target")
-    sh.odin("build", SRC, "-out:" .. BIN, "-o:speed")
+    sh.odin("build", SRC, "-out:" .. BIN, "-o:speed", "-extra-linker-flags:-static")
+    assert(linkage(BIN) == "static", BIN .. " is not statically linked")
     report(BIN)
   end,
 }
@@ -215,12 +232,26 @@ make.recipe{
 }
 make.alias("r", "run")
 
-make.recipe{ name = "test", desc = "the suite",
-             run = function() sh.odin("test", SRC) end }
+make.recipe{
+  name = "test",
+  desc = "the suite",
+  run = function()
+    for _, dir in ipairs(packages("*_test.odin")) do
+      sh.odin("test", dir)
+    end
+  end,
+}
 make.alias("t", "test")
 
-make.recipe{ name = "check", desc = "type-check without producing a binary",
-             run = function() sh.odin("check", SRC) end }
+make.recipe{
+  name = "check",
+  desc = "type-check without producing a binary",
+  run = function()
+    for _, dir in ipairs(packages("*.odin")) do
+      sh.odin("check", dir, "-no-entry-point")
+    end
+  end,
+}
 make.alias("vet", "check")
 
 -- odinfmt ships with ols rather than with odin, and ols is not in the dev shell: it does not build
