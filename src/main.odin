@@ -12,7 +12,7 @@ import tabs "./tabs"
 import tui "./tui"
 import ui "./ui"
 
-VERSION :: "0.1.0"
+VERSION :: "0.1.1"
 
 Options :: struct {
 	root:      string,

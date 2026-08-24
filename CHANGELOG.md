@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.1.1] - 2026-08-24
+
+### <!-- 0 -->⛰️  Features
+
+- Record asciinema casts for the readme
+- Render refs as coloured chips
+- Unify dialogs and add a shortcut list
+- Mirror the activity strip in the scrollbar
+- Wrap long names at separators
+- Wrap file paths instead of truncating
+- Reflow commit entries like git wrapping
+- Lay commits out like git tree
+- Remember selection and shorten paths
+- Add sized, placeable viewport
+- Make activity bar entries conditional
+- Add explorer mode and cwd reporting
+- Adopt lis icons, guides and git glyphs
+
+### <!-- 1 -->🐛 Bug Fixes
+
+- Bound command execution with a deadline
+- Repair node ownership and error paths
+- Narrow activity bar to three columns
+- Tighten activity bar spacing
+- Make activity strip visible and centered
+
+### <!-- 2 -->🚜 Refactor
+
+- Drop settings, themes and tree git markers
+- Reduce to three lists and one commit
+
 ## [0.0.0] - 2026-08-24
 
 ### <!-- 0 -->⛰️  Features
