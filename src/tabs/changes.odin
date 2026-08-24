@@ -82,29 +82,79 @@ changes_section_node :: proc(title: string, count: int, allocator: runtime.Alloc
 	}, allocator)
 }
 
-changes_entry_node :: proc(state: ^Changes_Tab, entry: ^gitcore.File_Entry, allocator: runtime.Allocator) -> tui.Node {
-	name := filepath.base(entry.path)
+// Columns consumed before the name: three of indent, the status glyph, the icon,
+// and a space after each. Continuation lines indent to here so a wrapped path sits
+// under the name rather than under the glyph.
+CHANGES_ENTRY_PREFIX :: 7
+
+// The directory a file lives in, or "" for one at the repository root.
+changes_entry_dir :: proc(entry: ^gitcore.File_Entry, allocator: runtime.Allocator) -> string {
 	dir := filepath.dir(entry.path, allocator)
-	if dir == "." {
-		delete(dir)
-		dir = ""
+	if dir == "." do return ""
+	return dir
+}
+
+// The path wraps rather than truncating, the same way the graph reflows a commit:
+// a deep path is worth reading in full, and an ellipsis hides exactly the part that
+// distinguishes two files with the same name.
+changes_entry_lines :: proc(entry: ^gitcore.File_Entry, width: int) -> [dynamic]string {
+	name := filepath.base(entry.path)
+	dir := changes_entry_dir(entry, context.temp_allocator)
+	room := max(width - CHANGES_ENTRY_PREFIX - 2, 8)
+	if dir == "" || tui.text_width(name) + 1 + tui.text_width(dir) <= room {
+		lines := make([dynamic]string, context.temp_allocator)
+		if dir == "" {
+			append(&lines, name)
+		} else {
+			append(&lines, fmt.aprintf("%s %s", name, dir, allocator = context.temp_allocator))
+		}
+		return lines
 	}
+	// Too long together: the name keeps the first line and the path flows beneath it.
+	lines := make([dynamic]string, context.temp_allocator)
+	append(&lines, name)
+	wrapped := tui.wrap_path(dir, room, context.temp_allocator)
+	append(&lines, ..wrapped[:])
+	return lines
+}
+
+changes_entry_height :: proc(entry: ^gitcore.File_Entry, width: int) -> int {
+	return len(changes_entry_lines(entry, width))
+}
+
+changes_entry_node :: proc(state: ^Changes_Tab, entry: ^gitcore.File_Entry, width: int, allocator: runtime.Allocator) -> tui.Node {
+	name := filepath.base(entry.path)
 	icon := model.file_icon(name, false, false)
-	children := make([dynamic]tui.Node, allocator)
-	defer delete(children)
-	append(&children, tui.text("   "))
-	append(&children, tui.text(changes_git_glyph(entry.letter), tui.merge_style(changes_status_style(entry.letter), tui.Style{attrs = {.Bold}})))
-	append(&children, tui.text(" "))
-	append(&children, tui.text(icon.glyph, tree_icon_style(icon)))
-	append(&children, tui.text(" "))
-	append(&children, tui.text(name))
-	if dir != "" {
-		append(&children, tui.text(" "))
-		append(&children, tui.priority(tui.truncate(changes_owned_text(dir, tui.Style{fg = tui.RAMP_FAINT, attrs = {.Dim}}), 0), 0, allocator))
+	lines := changes_entry_lines(entry, width)
+	rows := make([dynamic]tui.Node, allocator)
+	defer delete(rows)
+	for line, index in lines {
+		children := make([dynamic]tui.Node, allocator)
+		defer delete(children)
+		if index == 0 {
+			append(&children, tui.text("   "))
+			append(&children, tui.text(changes_git_glyph(entry.letter), tui.merge_style(changes_status_style(entry.letter), tui.Style{attrs = {.Bold}})))
+			append(&children, tui.text(" "))
+			append(&children, tui.text(icon.glyph, tree_icon_style(icon)))
+			append(&children, tui.text(" "))
+			// The name is plain and the directory beside it is dim, so a single line
+			// carrying both is split at the space rather than styled as one run.
+			if gap := strings.index_byte(line, ' '); gap >= 0 {
+				append(&children, tui.owned_text(strings.clone(line[:gap], allocator)))
+				append(&children, tui.text(" "))
+				append(&children, tui.owned_text(strings.clone(line[gap + 1:], allocator), tui.Style{fg = tui.RAMP_FAINT, attrs = {.Dim}}))
+			} else {
+				append(&children, tui.owned_text(strings.clone(line, allocator)))
+			}
+		} else {
+			append(&children, tui.priority(tui.transparent(CHANGES_ENTRY_PREFIX), 100, allocator))
+			append(&children, tui.owned_text(strings.clone(line, allocator), tui.Style{fg = tui.RAMP_FAINT, attrs = {.Dim}}))
+		}
+		append(&children, tui.spacer())
+		append(&children, tui.priority(tui.transparent(2), 100, allocator))
+		append(&rows, tui.row(children[:], allocator))
 	}
-	append(&children, tui.spacer())
-	append(&children, tui.transparent(2))
-	return tui.row(children[:], allocator)
+	return tui.column(rows[:], allocator)
 }
 
 changes_message_node :: proc(state: ^Changes_Tab, allocator: runtime.Allocator) -> tui.Node {
@@ -143,6 +193,7 @@ changes_append_section :: proc(
 	section: Changes_Section,
 	title: string,
 	entries: []gitcore.File_Entry,
+	width: int,
 	allocator: runtime.Allocator,
 ) {
 	if len(entries) == 0 do return
@@ -161,10 +212,10 @@ changes_append_section :: proc(
 			id = id,
 			path = strings.clone(entry.path, allocator),
 			selectable = true,
-			height = 1,
+			height = changes_entry_height(&entry, width),
 			kind = .Git_Entry,
 			staged = section == .Staged,
-			node = changes_entry_node(state, &entry, allocator),
+			node = changes_entry_node(state, &entry, width, allocator),
 		})
 	}
 }
@@ -188,9 +239,9 @@ changes_rows_proc :: proc(data: rawptr, width: int, allocator: runtime.Allocator
 			append(&changed, entry)
 		}
 	}
-	changes_append_section(state, &rows, .New, "NEW", fresh[:], allocator)
-	changes_append_section(state, &rows, .Modified, "MODIFIED", changed[:], allocator)
-	changes_append_section(state, &rows, .Staged, "STAGED", state.status.staged[:], allocator)
+	changes_append_section(state, &rows, .New, "NEW", fresh[:], width, allocator)
+	changes_append_section(state, &rows, .Modified, "MODIFIED", changed[:], width, allocator)
+	changes_append_section(state, &rows, .Staged, "STAGED", state.status.staged[:], width, allocator)
 	if len(rows) == 0 {
 		id := strings.clone(" Working tree clean", allocator)
 		append(&rows, Row{id = id, path = strings.clone(id, allocator), selectable = false, height = 1, node = tui.text(id, tui.Style{fg = tui.RAMP_FAINT, attrs = {.Dim}})})

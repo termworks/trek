@@ -295,3 +295,31 @@ test_wrap_words_handles_degenerate_widths :: proc(t: ^testing.T) {
 	defer destroy_lines(&empty)
 	testing.expect_value(t, len(empty), 1)
 }
+
+// A path has no spaces, so word wrap hard-breaks it mid-directory. Breaking after a
+// separator keeps every segment readable.
+@(test)
+test_wrap_path_breaks_after_separators :: proc(t: ^testing.T) {
+	lines := wrap_path("src/deeply/nested/subdirectory/structure", 20)
+	defer destroy_lines(&lines)
+	for line in lines do testing.expectf(t, text_width(line) <= 20, "overflowed: %q", line)
+	// Every break lands after a slash, never inside a name.
+	for line, index in lines {
+		if index == len(lines) - 1 do break
+		testing.expectf(t, strings.has_suffix(line, "/"), "broke mid-segment: %q", line)
+	}
+	joined := strings.concatenate(lines[:], context.allocator)
+	defer delete(joined)
+	testing.expect_value(t, joined, "src/deeply/nested/subdirectory/structure")
+}
+
+@(test)
+test_wrap_path_handles_oversized_segments :: proc(t: ^testing.T) {
+	// One segment wider than the line has to break somewhere; nothing may be lost.
+	lines := wrap_path("a/reallyreallyreallylongsegment/b", 10)
+	defer destroy_lines(&lines)
+	for line in lines do testing.expect(t, text_width(line) <= 10)
+	joined := strings.concatenate(lines[:], context.allocator)
+	defer delete(joined)
+	testing.expect_value(t, joined, "a/reallyreallyreallylongsegment/b")
+}

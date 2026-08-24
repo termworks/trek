@@ -1,6 +1,7 @@
 package tabs
 
 import "core:os"
+import "core:strings"
 import "core:path/filepath"
 import "core:testing"
 import "core:time"
@@ -465,4 +466,21 @@ test_relative_time_matches_git :: proc(t: ^testing.T) {
 	check(t, now, 86400 * 200, "7 months ago")
 	check(t, now, 86400 * 400, "1 year, 1 month ago")
 	check(t, now, 86400 * 365 * 6, "6 years ago")
+}
+
+// A changed file deep in the tree wraps its path instead of losing it to an
+// ellipsis: two files with the same name are told apart only by what gets cut.
+@(test)
+test_changes_entry_wraps_long_paths :: proc(t: ^testing.T) {
+	entry := gitcore.File_Entry{path = "src/deeply/nested/subdirectory/component.odin", letter = 'M'}
+	wide := changes_entry_height(&entry, 120)
+	testing.expect_value(t, wide, 1)
+	narrow := changes_entry_height(&entry, 40)
+	testing.expect(t, narrow > 1)
+
+	lines := changes_entry_lines(&entry, 40)
+	testing.expect_value(t, lines[0], "component.odin")
+	rest := strings.concatenate(lines[1:], context.allocator)
+	defer delete(rest)
+	testing.expect_value(t, rest, "src/deeply/nested/subdirectory")
 }

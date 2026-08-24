@@ -223,3 +223,49 @@ wrap_words :: proc(value: string, width: int, allocator := context.allocator) ->
 	}
 	return lines
 }
+
+// Wrap a path, breaking after a separator rather than mid-segment. Word wrap has
+// nothing to work with here — a path contains no spaces — so it hard-breaks in the
+// middle of a directory name, which is both ugly and ambiguous. A segment wider
+// than the line still has to break somewhere.
+wrap_path :: proc(value: string, width: int, allocator := context.allocator) -> [dynamic]string {
+	lines := make([dynamic]string, allocator)
+	if width <= 0 || value == "" {
+		append(&lines, strings.clone(value if width > 0 else "", allocator))
+		return lines
+	}
+	current := strings.builder_make(context.temp_allocator)
+	used := 0
+	start := 0
+	for index := 0; index <= len(value); index += 1 {
+		// Cut after each separator, and once more at the end for the tail segment.
+		if index < len(value) && value[index] != '/' do continue
+		piece := value[start:min(index + 1, len(value))]
+		start = index + 1
+		piece_width := text_width(piece)
+		if used > 0 && used + piece_width > width {
+			append(&lines, strings.clone(strings.to_string(current), allocator))
+			strings.builder_reset(&current)
+			used = 0
+		}
+		if piece_width > width {
+			for r in piece {
+				rune_width := text_width(utf8.runes_to_string({r}, context.temp_allocator))
+				if used + rune_width > width && used > 0 {
+					append(&lines, strings.clone(strings.to_string(current), allocator))
+					strings.builder_reset(&current)
+					used = 0
+				}
+				strings.write_rune(&current, r)
+				used += rune_width
+			}
+			continue
+		}
+		strings.write_string(&current, piece)
+		used += piece_width
+	}
+	if used > 0 || len(lines) == 0 {
+		append(&lines, strings.clone(strings.to_string(current), allocator))
+	}
+	return lines
+}
