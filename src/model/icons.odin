@@ -3,10 +3,6 @@ package model
 import "core:path/filepath"
 import "core:strings"
 
-Icon_Theme :: enum {
-	Emoji,
-	Material,
-}
 
 Icon_Kind :: enum {
 	Dir,
@@ -68,26 +64,6 @@ Icon :: struct {
 	g:       u8,
 	b:       u8,
 	colored: bool,
-}
-
-icon_theme_name :: proc(theme: Icon_Theme) -> string {
-	if theme == .Material do return "material"
-	return "emoji"
-}
-
-icon_theme_parse :: proc(value: string) -> (Icon_Theme, bool) {
-	lower := strings.to_lower(strings.trim_space(value))
-	defer delete(lower)
-	switch lower {
-	case "emoji": return .Emoji, true
-	case "material": return .Material, true
-	}
-	return .Emoji, false
-}
-
-icon_theme_toggle :: proc(theme: Icon_Theme) -> Icon_Theme {
-	if theme == .Emoji do return .Material
-	return .Emoji
 }
 
 icon_special_kind :: proc(lower: string) -> (Icon_Kind, bool) {
@@ -163,63 +139,6 @@ icon_kind :: proc(name: string, is_dir, expanded: bool) -> Icon_Kind {
 	return icon_extension_kind(filepath.ext(lower))
 }
 
-emoji_icon :: proc(kind: Icon_Kind) -> string {
-	switch kind {
-	case .Dir: return "📁"
-	case .Dir_Open: return "📂"
-	case .Rust: return "🦀"
-	case .Odin: return "⚔"
-	case .Python: return "🐍"
-	case .JavaScript: return "🟨"
-	case .TypeScript: return "🔷"
-	case .React: return "🟦"
-	case .Json: return "🧾"
-	case .Markdown: return "📝"
-	case .Html: return "🌐"
-	case .Css: return "🎨"
-	case .Config: return "🔧"
-	case .Xml: return "📰"
-	case .Shell: return "🐚"
-	case .PowerShell: return "💻"
-	case .CFamily: return "🔩"
-	case .CPlusPlus: return "🔩"
-	case .Header: return "📘"
-	case .Zig: return "⚡"
-	case .Vim: return "💚"
-	case .Svg: return "🖼"
-	case .CSharp: return "🟣"
-	case .Go: return "🐹"
-	case .Ruby: return "💎"
-	case .Php: return "🐘"
-	case .Java: return "☕"
-	case .Kotlin: return "🟪"
-	case .Swift: return "🐦"
-	case .Lua: return "🌙"
-	case .Sql: return "💾"
-	case .Data: return "📊"
-	case .Text: return "📄"
-	case .Log: return "📋"
-	case .Pdf: return "📕"
-	case .Image: return "📷"
-	case .Audio: return "🎵"
-	case .Video: return "🎬"
-	case .Archive: return "🧳"
-	case .Lock: return "🔒"
-	case .Binary: return "⚡"
-	case .Font: return "🔤"
-	case .Notebook: return "📓"
-	case .Git: return "🙈"
-	case .Docker: return "🐳"
-	case .Package: return "📦"
-	case .Build: return "🔨"
-	case .Readme: return "📖"
-	case .License: return "📜"
-	case .Env_Key: return "🔑"
-	case .File: return "📄"
-	}
-	return "📄"
-}
-
 material_icon :: proc(kind: Icon_Kind) -> Icon {
 	#partial switch kind {
 	case .Dir: return Icon{glyph = "\uf07b", r = 0x90, g = 0xa4, b = 0xae, colored = true}
@@ -277,8 +196,7 @@ material_icon :: proc(kind: Icon_Kind) -> Icon {
 	return Icon{glyph = "\uf15b", r = 0x90, g = 0xa4, b = 0xae, colored = true}
 }
 
-file_icon :: proc(theme: Icon_Theme, name: string, is_dir, expanded: bool) -> Icon {
-	kind := icon_kind(name, is_dir, expanded)
-	if theme == .Material do return material_icon(kind)
-	return Icon{glyph = emoji_icon(kind)}
+// Icons are always the Nerd Font set; there is no second theme to choose from.
+file_icon :: proc(name: string, is_dir, expanded: bool) -> Icon {
+	return material_icon(icon_kind(name, is_dir, expanded))
 }

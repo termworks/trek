@@ -63,7 +63,6 @@ Focus_Proc :: proc(data: rawptr) -> Tab_Result
 Paste_Proc :: proc(data: rawptr, value: string, selected: ^Row) -> Tab_Result
 Root_Proc :: proc(data: rawptr, root: string) -> Tab_Result
 Heading_Proc :: proc(data: rawptr) -> Tab_Heading
-Theme_Proc :: proc(data: rawptr, theme: model.Icon_Theme)
 
 Tab :: struct {
 	name:      string,
@@ -80,7 +79,6 @@ Tab :: struct {
 	on_paste:  Paste_Proc,
 	on_root:   Root_Proc,
 	heading:   Heading_Proc,
-	set_theme: Theme_Proc,
 }
 
 tab_rows :: proc(tab: ^Tab, allocator := context.allocator) -> [dynamic]Row {
@@ -133,6 +131,3 @@ tab_heading :: proc(tab: ^Tab) -> Tab_Heading {
 	return tab.heading(tab.data)
 }
 
-tab_set_theme :: proc(tab: ^Tab, theme: model.Icon_Theme) {
-	if tab.set_theme != nil do tab.set_theme(tab.data, theme)
-}

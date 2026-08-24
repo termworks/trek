@@ -115,31 +115,15 @@ test_shell_renders_headless_buffer :: proc(t: ^testing.T) {
 	testing.expect(t, ok)
 	testing.expect_value(t, cell.rune, 'E')
 	testing.expect(t, len(layout.regions) == 0)
-	marker, marker_ok := tui.buffer_get(&buffer, 0, shell_activity_origin(&shell, buffer.height))
-	testing.expect(t, marker_ok)
-	testing.expect_value(t, marker.rune, '▌')
-	testing.expect_value(t, marker.style.fg, tui.ACCENT)
-}
-
-@(test)
-test_settings_overlay_uses_reference_frame :: proc(t: ^testing.T) {
-	overlay: Overlay
-	overlay_init(&overlay)
-	defer overlay_destroy(&overlay)
-	overlay_settings(&overlay, "material", false, true, "tree")
-	buffer: tui.Buffer
-	tui.buffer_init(&buffer, 50, 20)
-	defer tui.buffer_destroy(&buffer)
-	overlay_render(&overlay, &buffer)
-	rect := overlay_rect(&overlay, buffer.width, buffer.height)
-	top_left, _ := tui.buffer_get(&buffer, rect.x, rect.y)
-	top_right, _ := tui.buffer_get(&buffer, rect.x + rect.width - 1, rect.y)
-	bottom_left, _ := tui.buffer_get(&buffer, rect.x, rect.y + rect.height - 1)
-	selected, _ := tui.buffer_get(&buffer, rect.x + 2, rect.y + 1)
-	testing.expect_value(t, top_left.rune, '┌')
-	testing.expect_value(t, top_right.rune, '┐')
-	testing.expect_value(t, bottom_left.rune, '└')
-	testing.expect_value(t, selected.style.bg, tui.SELECTED_BG)
+	top, _ := shell_activity_bounds(&shell, 0, buffer.height)
+	cap_top, cap_ok := tui.buffer_get(&buffer, 0, top)
+	body, _ := tui.buffer_get(&buffer, 0, top + 1)
+	cap_bottom, _ := tui.buffer_get(&buffer, 0, top + 2)
+	testing.expect(t, cap_ok)
+	testing.expect_value(t, cap_top.rune, '▄')
+	testing.expect_value(t, cap_top.style.fg, tui.ACTIVITY_ACTIVE_BG)
+	testing.expect_value(t, body.style.bg, tui.ACTIVITY_ACTIVE_BG)
+	testing.expect_value(t, cap_bottom.rune, '▀')
 }
 
 @(test)
@@ -158,41 +142,14 @@ test_graph_has_its_own_activity_slot :: proc(t: ^testing.T) {
 	tui.layout_init(&layout)
 	defer tui.layout_destroy(&layout)
 	shell_render(&shell, &buffer, &layout)
-	// Every tab owns a slot, and only the active one carries the accent marker.
-	graph_top, graph_bottom := shell_activity_bounds(&shell, 2, buffer.height)
+	// Every tab owns a slot; only the active one is lit.
+	graph_top, _ := shell_activity_bounds(&shell, 2, buffer.height)
 	testing.expect_value(t, graph_top, shell_activity_origin(&shell, buffer.height) + 2 * ACTIVITY_SLOT)
-	for y in graph_top ..< graph_bottom {
-		marker, _ := tui.buffer_get(&buffer, 0, y)
-		testing.expect_value(t, marker.rune, '▌')
-		testing.expect_value(t, marker.style.fg, tui.ACCENT)
-	}
+	lit, _ := tui.buffer_get(&buffer, 0, graph_top + 1)
+	testing.expect_value(t, lit.style.bg, tui.ACTIVITY_ACTIVE_BG)
 	changes_top, _ := shell_activity_bounds(&shell, 1, buffer.height)
-	inactive, _ := tui.buffer_get(&buffer, 0, changes_top)
-	testing.expect(t, inactive.style.fg != tui.ACCENT)
-}
-
-@(test)
-test_settings_overlay_updates_and_persists :: proc(t: ^testing.T) {
-	root, err := os.make_directory_temp("", "trek-ui-settings-*", context.allocator)
-	testing.expect(t, err == nil)
-	defer { _ = os.remove_all(root); delete(root) }
-	preferences: settings.Preferences
-	settings.preferences_init(&preferences, root)
-	defer settings.preferences_destroy(&preferences)
-	shell: Shell
-	shell_init(&shell)
-	defer shell_destroy(&shell)
-	shell_set_preferences(&shell, &preferences)
-	shell_add_tab(&shell, tabpkg.tree_tab(root, .Emoji, false, true))
-	shell_key(&shell, tui.Key{code = .Rune, rune = ','}, 8)
-	testing.expect_value(t, shell.overlay.kind, Overlay_Kind.Settings)
-	shell_key(&shell, tui.Key{code = .Enter}, 8)
-	testing.expect_value(t, preferences.icons, "material")
-	_, _, _, _, _, ok := tabpkg.tree_state(shell_tree_tab(&shell))
-	testing.expect(t, ok)
-	info, stat_error := os.stat(preferences.path, context.allocator)
-	testing.expect(t, stat_error == nil)
-	if stat_error == nil do os.file_info_delete(info, context.allocator)
+	inactive, _ := tui.buffer_get(&buffer, 0, changes_top + 1)
+	testing.expect_value(t, inactive.style.bg, tui.ACTIVITY_BG)
 }
 
 @(test)

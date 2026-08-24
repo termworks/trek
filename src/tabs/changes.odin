@@ -22,7 +22,6 @@ Changes_Tab :: struct {
 	repo:      gitcore.Git_Repo,
 	status:    gitcore.Status,
 	message:   [dynamic]byte,
-	theme:     model.Icon_Theme,
 	has_repo:  bool,
 	allocator: runtime.Allocator,
 }
@@ -51,11 +50,10 @@ changes_refresh :: proc(state: ^Changes_Tab) {
 	state.has_repo = true
 }
 
-changes_new :: proc(root: string, theme := model.Icon_Theme.Emoji, allocator := context.allocator) -> ^Changes_Tab {
+changes_new :: proc(root: string, allocator := context.allocator) -> ^Changes_Tab {
 	state := new(Changes_Tab, allocator)
 	state.allocator = allocator
 	state.root = strings.clone(root, allocator)
-	state.theme = theme
 	state.message = make([dynamic]byte, allocator)
 	changes_refresh(state)
 	return state
@@ -91,11 +89,11 @@ changes_entry_node :: proc(state: ^Changes_Tab, entry: ^gitcore.File_Entry, allo
 		delete(dir)
 		dir = ""
 	}
-	icon := model.file_icon(state.theme, name, false, false)
+	icon := model.file_icon(name, false, false)
 	children := make([dynamic]tui.Node, allocator)
 	defer delete(children)
 	append(&children, tui.text("   "))
-	append(&children, tui.text(tree_git_glyph(entry.letter), tui.merge_style(status_style(entry.letter), tui.Style{attrs = {.Bold}})))
+	append(&children, tui.text(changes_git_glyph(entry.letter), tui.merge_style(changes_status_style(entry.letter), tui.Style{attrs = {.Bold}})))
 	append(&children, tui.text(" "))
 	append(&children, tui.text(icon.glyph, tree_icon_style(icon)))
 	append(&children, tui.text(" "))
@@ -349,13 +347,8 @@ changes_heading_proc :: proc(data: rawptr) -> Tab_Heading {
 	return Tab_Heading{title = "Changes", detail = state.status.branch}
 }
 
-changes_theme_proc :: proc(data: rawptr, theme: model.Icon_Theme) {
-	state := (^Changes_Tab)(data)
-	state.theme = theme
-}
-
-changes_tab :: proc(root: string, theme := model.Icon_Theme.Emoji, allocator := context.allocator) -> Tab {
-	state := changes_new(root, theme, allocator)
+changes_tab :: proc(root: string, allocator := context.allocator) -> Tab {
+	state := changes_new(root, allocator)
 	return Tab{
 		name = "changes",
 		title = "Changes",
@@ -371,6 +364,37 @@ changes_tab :: proc(root: string, theme := model.Icon_Theme.Emoji, allocator := 
 		destroy = changes_destroy_proc,
 		on_root = changes_root_proc,
 		heading = changes_heading_proc,
-		set_theme = changes_theme_proc,
 	}
+}
+// Symbolic git markers rather than status letters, the vocabulary lis used.
+changes_git_glyph :: proc(letter: rune) -> string {
+	switch letter {
+	case 'U': return "✭"
+	case 'M': return "✹"
+	case 'A': return "✚"
+	case 'R', 'C': return "➜"
+	case 'I': return "☒"
+	case '!': return "═"
+	case 'D': return "✖"
+	}
+	return " "
+}
+
+changes_status_style :: proc(letter: rune) -> tui.Style {
+	style := tui.Style{fg = tui.status_color(letter), bg = tui.DEFAULT_COLOR}
+	if letter == 'I' do style.attrs = {.Dim}
+	return style
+}
+
+changes_status_text :: proc(letter: rune) -> string {
+	switch letter {
+	case 'M': return "M"
+	case 'U': return "U"
+	case 'A': return "A"
+	case 'R': return "R"
+	case 'C': return "C"
+	case 'D': return "D"
+	case '!': return "!"
+	}
+	return ""
 }

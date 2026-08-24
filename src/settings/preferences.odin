@@ -12,9 +12,7 @@ Root_State :: struct {
 }
 
 Preferences :: struct {
-	icons:           string,
 	hidden:          bool,
-	git_decorations: bool,
 	start_tab:       string,
 	roots:           [dynamic]Root_State,
 	path:            string `json:"-"`,
@@ -33,9 +31,7 @@ default_state_dir :: proc(allocator := context.allocator) -> string {
 
 preferences_init :: proc(preferences: ^Preferences, state_path := "", allocator := context.allocator) {
 	preferences.allocator = allocator
-	preferences.icons = strings.clone("", allocator)
 	preferences.start_tab = strings.clone("tree", allocator)
-	preferences.git_decorations = true
 	preferences.roots = make([dynamic]Root_State, allocator)
 	dir := state_path
 	if dir == "" do dir = default_state_dir(context.temp_allocator)
@@ -50,7 +46,6 @@ root_state_destroy :: proc(state: ^Root_State) {
 }
 
 preferences_destroy :: proc(preferences: ^Preferences) {
-	delete(preferences.icons)
 	delete(preferences.start_tab)
 	for &state in preferences.roots do root_state_destroy(&state)
 	delete(preferences.roots)
@@ -59,10 +54,6 @@ preferences_destroy :: proc(preferences: ^Preferences) {
 }
 
 preferences_validate :: proc(preferences: ^Preferences) {
-	if preferences.icons != "material" && preferences.icons != "emoji" {
-		delete(preferences.icons)
-		preferences.icons = strings.clone("", preferences.allocator)
-	}
 	if preferences.start_tab == "" {
 		delete(preferences.start_tab)
 		preferences.start_tab = strings.clone("tree", preferences.allocator)
@@ -131,10 +122,6 @@ preferences_set_expanded :: proc(preferences: ^Preferences, root: string, paths:
 	for path in paths do append(&state.expanded, strings.clone(path, preferences.allocator))
 }
 
-preferences_set_icons :: proc(preferences: ^Preferences, value: string) {
-	delete(preferences.icons)
-	preferences.icons = strings.clone(value, preferences.allocator)
-}
 
 preferences_set_start_tab :: proc(preferences: ^Preferences, value: string) {
 	delete(preferences.start_tab)
@@ -149,10 +136,3 @@ nerd_font_installed :: proc() -> bool {
 	return strings.contains(strings.to_lower(string(stdout), context.temp_allocator), "nerd")
 }
 
-resolved_icons :: proc(preferences: ^Preferences) -> string {
-	env := strings.to_lower(strings.trim_space(os.get_env("TREK_ICONS", context.temp_allocator)), context.temp_allocator)
-	if env == "material" || env == "emoji" do return env
-	if preferences.icons == "material" || preferences.icons == "emoji" do return preferences.icons
-	if nerd_font_installed() do return "material"
-	return "emoji"
-}

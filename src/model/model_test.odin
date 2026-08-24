@@ -124,11 +124,12 @@ test_tree_restores_only_paths_in_root :: proc(t: ^testing.T) {
 
 @(test)
 test_icons_classify_names_and_extensions :: proc(t: ^testing.T) {
-	testing.expect_value(t, file_icon(.Emoji, "src", true, false).glyph, "📁")
-	testing.expect_value(t, file_icon(.Emoji, "src", true, true).glyph, "📂")
-	testing.expect_value(t, file_icon(.Emoji, "Cargo.toml", false, false).glyph, "📦")
-	testing.expect_value(t, file_icon(.Emoji, "README.md", false, false).glyph, "📖")
-	testing.expect_value(t, file_icon(.Emoji, "MAIN.ODIN", false, false).glyph, "⚔")
+	testing.expect_value(t, file_icon("src", true, false).glyph, "\uf07b")
+	testing.expect_value(t, file_icon("src", true, true).glyph, "\uf07c")
+	testing.expect_value(t, file_icon("Cargo.toml", false, false).glyph, "\uf487")
+	testing.expect_value(t, file_icon("README.md", false, false).glyph, "\uf02d")
+	testing.expect_value(t, file_icon("main.cpp", false, false).glyph, "\ue61d")
+	testing.expect_value(t, file_icon("main.h", false, false).glyph, "\uf0fd")
 }
 
 @(test)

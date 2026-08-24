@@ -82,12 +82,9 @@ shell_tree_tab :: proc(shell: ^Shell) -> ^tabpkg.Tab {
 
 shell_sync_preferences :: proc(shell: ^Shell) {
 	if shell.preferences == nil do return
-	tab := shell_tree_tab(shell)
-	theme, hidden, git_decorations, root, expanded, ok := tabpkg.tree_state(tab)
+	hidden, root, expanded, ok := tabpkg.tree_state(shell_tree_tab(shell))
 	if !ok do return
-	settings.preferences_set_icons(shell.preferences, model.icon_theme_name(theme))
 	shell.preferences.hidden = hidden
-	shell.preferences.git_decorations = git_decorations
 	settings.preferences_set_expanded(shell.preferences, root, expanded)
 }
 
@@ -95,34 +92,6 @@ shell_save_preferences :: proc(shell: ^Shell) {
 	if shell.preferences == nil do return
 	shell_sync_preferences(shell)
 	_ = settings.preferences_save(shell.preferences)
-}
-
-shell_apply_setting :: proc(shell: ^Shell, setting: Setting_Action) {
-	if shell.preferences == nil do return
-	tab := shell_tree_tab(shell)
-	theme, hidden, git_decorations, _, _, ok := tabpkg.tree_state(tab)
-	if !ok do return
-	switch setting {
-	case .Icons: theme = model.icon_theme_toggle(theme)
-	case .Hidden: hidden = !hidden
-	case .Git_Decorations: git_decorations = !git_decorations
-	case .Start_Tab:
-		active := shell_active_tab(shell)
-		if active != nil do settings.preferences_set_start_tab(shell.preferences, active.name)
-	case .None:
-	}
-	_ = tabpkg.tree_apply_preferences(tab, theme, hidden, git_decorations)
-	for &other in shell.tabs do tabpkg.tab_set_theme(&other, theme)
-	shell_sync_preferences(shell)
-	_ = settings.preferences_save(shell.preferences)
-	shell_reload(shell)
-	overlay_settings(
-		&shell.overlay,
-		shell.preferences.icons,
-		shell.preferences.hidden,
-		shell.preferences.git_decorations,
-		shell.preferences.start_tab,
-	)
 }
 
 shell_clear_menu :: proc(shell: ^Shell) {
@@ -362,10 +331,6 @@ shell_overlay_result :: proc(shell: ^Shell, result: Overlay_Result) {
 		shell_clear_menu(shell)
 		return
 	}
-	if result.setting != .None {
-		shell_apply_setting(shell, result.setting)
-		return
-	}
 	if !result.submit do return
 	action := result.action
 	value := result.value
@@ -437,18 +402,6 @@ shell_key :: proc(shell: ^Shell, key: tui.Key, viewport: int) {
 		shell_switch_tab(shell, int(key.rune - '1'))
 		return
 	}
-	if key.code == .Rune && (key.rune == 's' || key.rune == ',') {
-		if shell.preferences != nil {
-			overlay_settings(
-				&shell.overlay,
-				shell.preferences.icons,
-				shell.preferences.hidden,
-				shell.preferences.git_decorations,
-				shell.preferences.start_tab,
-			)
-		}
-		return
-	}
 	tab := shell_active_tab(shell)
 	row := shell_selected_row(shell)
 	if key.code == .Enter {
@@ -488,15 +441,6 @@ shell_mouse :: proc(shell: ^Shell, mouse: tui.Mouse_Event, width, height: int) {
 				if mouse.action == .Press do shell_switch_tab(shell, index)
 				return
 			}
-		}
-		if mouse.action == .Press && mouse.y == shell_gear_row(shell, height) && shell.preferences != nil {
-			overlay_settings(
-				&shell.overlay,
-				shell.preferences.icons,
-				shell.preferences.hidden,
-				shell.preferences.git_decorations,
-				shell.preferences.start_tab,
-			)
 		}
 		return
 	}
@@ -540,26 +484,14 @@ shell_viewport_height :: proc(height: int) -> int {
 	return max(height - HEADER_HEIGHT - FOOTER_HEIGHT, 0)
 }
 
-shell_material_icons :: proc(shell: ^Shell) -> bool {
-	if shell.preferences != nil do return shell.preferences.icons == "material"
-	if shell.config != nil do return shell.config.settings.icons == "material"
-	return false
-}
-
 shell_tab_icon :: proc(shell: ^Shell, index: int) -> string {
 	if index < 0 || index >= len(shell.tabs) do return ""
-	material := shell_material_icons(shell)
 	switch shell.tabs[index].name {
-	case "tree": return material ? "\uf07b" : "📁"
-	case "changes": return material ? "\uf126" : "🔀"
-	case "graph": return material ? "\ue725" : "⑂"
+	case "tree": return "\uf07b"
+	case "changes": return "\uf126"
+	case "graph": return "\ue725"
 	}
 	return shell.tabs[index].icon
-}
-
-shell_gear :: proc(shell: ^Shell) -> string {
-	if shell_material_icons(shell) do return "\uf013"
-	return "⚙"
 }
 
 // Row of the first slot. The icon block is centred in the column's usable height
@@ -577,24 +509,33 @@ shell_activity_bounds :: proc(shell: ^Shell, target, height: int) -> (int, int) 
 	return top, top + ACTIVITY_SLOT
 }
 
-shell_gear_row :: proc(shell: ^Shell, height: int) -> int {
-	return max(height - FOOTER_HEIGHT - 2, 0)
-}
-
-// One slot: the accent bar in column 0, then the glyph centred in what is left.
+// One slot. The active tab lights its whole middle row with the selection colour and
+// caps it above and below with half blocks drawn in that same colour, so the
+// highlight reads as a capsule around the icon rather than a hard rectangle.
 shell_draw_slot :: proc(shell: ^Shell, buffer: ^tui.Buffer, top: int, icon: string, active, hovered: bool) {
-	fill := tui.Style{bg = tui.ACTIVITY_BG}
-	if active do fill = tui.Style{bg = tui.ACTIVITY_ACTIVE_BG}
-	else if hovered do fill = tui.Style{bg = tui.HOVER_BG}
-	for y in top ..< min(top + ACTIVITY_SLOT, buffer.height) {
-		for x in 0 ..< ACTIVITY_WIDTH do tui.buffer_set(buffer, x, y, tui.Cell{rune = ' ', style = fill})
-		if active do tui.buffer_set(buffer, 0, y, tui.Cell{rune = '▌', style = tui.Style{fg = tui.ACCENT, bg = fill.bg}})
-	}
+	bar := tui.Style{bg = tui.ACTIVITY_BG}
+	highlight := active ? tui.ACTIVITY_ACTIVE_BG : tui.HOVER_BG
 	middle := top + ACTIVITY_SLOT / 2
+	for y in top ..< min(top + ACTIVITY_SLOT, buffer.height) {
+		for x in 0 ..< ACTIVITY_WIDTH {
+			cell := tui.Cell{rune = ' ', style = bar}
+			if active || hovered {
+				switch {
+				case y == middle:
+					cell.style = tui.Style{bg = highlight}
+				case y == middle - 1:
+					cell = tui.Cell{rune = '▄', style = tui.Style{fg = highlight, bg = tui.ACTIVITY_BG}}
+				case y == middle + 1:
+					cell = tui.Cell{rune = '▀', style = tui.Style{fg = highlight, bg = tui.ACTIVITY_BG}}
+				}
+			}
+			tui.buffer_set(buffer, x, y, cell)
+		}
+	}
 	if middle >= buffer.height do return
-	glyph := tui.Style{fg = active ? tui.RAMP_BRIGHT : tui.RAMP_MUTED, bg = fill.bg}
+	glyph := tui.Style{fg = active ? tui.RAMP_BRIGHT : tui.RAMP_MUTED, bg = active || hovered ? highlight : tui.ACTIVITY_BG}
 	if !active && !hovered do glyph.attrs = {.Dim}
-	x := 1 + max((ACTIVITY_WIDTH - 1 - tui.text_width(icon)) / 2, 0)
+	x := max((ACTIVITY_WIDTH - tui.text_width(icon)) / 2, 0)
 	tui.buffer_draw_text(buffer, x, middle, icon, glyph, ACTIVITY_WIDTH - x)
 }
 
@@ -604,13 +545,6 @@ shell_draw_activity :: proc(shell: ^Shell, buffer: ^tui.Buffer) {
 		top, _ := shell_activity_bounds(shell, index, buffer.height)
 		if top >= buffer.height do break
 		shell_draw_slot(shell, buffer, top, shell_tab_icon(shell, index), index == shell.active, index == shell.hover_tab)
-	}
-	gear_y := shell_gear_row(shell, buffer.height)
-	if gear_y < buffer.height {
-		gear := shell_gear(shell)
-		style := tui.Style{fg = tui.RAMP_MUTED, bg = tui.ACTIVITY_BG, attrs = {.Dim}}
-		x := 1 + max((ACTIVITY_WIDTH - 1 - tui.text_width(gear)) / 2, 0)
-		tui.buffer_draw_text(buffer, x, gear_y, gear, style, ACTIVITY_WIDTH - x)
 	}
 }
 
@@ -634,13 +568,8 @@ shell_draw_header :: proc(shell: ^Shell, buffer: ^tui.Buffer, tab: ^tabpkg.Tab) 
 			_ = tui.buffer_draw_text(buffer, x, y, heading.meta, tui.Style{attrs = {.Dim}}, buffer.width - x)
 		}
 	}
-	actions := " ⟳ ⊟ "
-	if shell_material_icons(shell) {
-		actions = " \ueb37 \ueac5 "
-		if tab.name == "tree" do actions = " \uea7f \uea80 \ueb37 \ueac5 "
-	} else if tab.name == "tree" {
-		actions = " 📄 📁 ⟳ ⊟ "
-	}
+	actions := " \ueb37 \ueac5 "
+	if tab.name == "tree" do actions = " \uea7f \uea80 \ueb37 \ueac5 "
 	actions_width := tui.text_width(actions)
 	if actions_width < buffer.width do tui.buffer_draw_text(buffer, buffer.width - actions_width, y, actions, tui.Style{attrs = {.Dim}}, actions_width)
 }

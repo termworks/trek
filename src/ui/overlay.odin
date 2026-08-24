@@ -11,7 +11,6 @@ Overlay_Kind :: enum {
 	Menu,
 	Prompt,
 	Confirm,
-	Settings,
 }
 
 Overlay :: struct {
@@ -22,19 +21,8 @@ Overlay :: struct {
 	action:   model.Action,
 	input:    [dynamic]byte,
 	allocator: runtime.Allocator,
-	settings_icons: string,
-	settings_hidden: bool,
-	settings_git: bool,
-	settings_start: string,
 }
 
-Setting_Action :: enum {
-	None,
-	Icons,
-	Hidden,
-	Git_Decorations,
-	Start_Tab,
-}
 
 Overlay_Result :: struct {
 	dismiss: bool,
@@ -42,7 +30,6 @@ Overlay_Result :: struct {
 	action:  model.Action,
 	value:   string,
 	entry_id: string,
-	setting: Setting_Action,
 }
 
 overlay_init :: proc(overlay: ^Overlay, allocator := context.allocator) {
@@ -85,15 +72,6 @@ overlay_confirm :: proc(overlay: ^Overlay, title: string, action: model.Action) 
 	overlay.action = action
 }
 
-overlay_settings :: proc(overlay: ^Overlay, icons: string, hidden, git_decorations: bool, start_tab: string) {
-	overlay_close(overlay)
-	overlay.kind = .Settings
-	overlay.title = "Settings"
-	overlay.settings_icons = icons
-	overlay.settings_hidden = hidden
-	overlay.settings_git = git_decorations
-	overlay.settings_start = start_tab
-}
 
 overlay_append_rune :: proc(overlay: ^Overlay, value: rune) {
 	encoded, count := utf8.encode_rune(value)
@@ -133,21 +111,6 @@ overlay_key :: proc(overlay: ^Overlay, key: tui.Key) -> Overlay_Result {
 		if key.code == .Rune && (key.rune == 'n' || key.rune == 'N' || key.rune == 'q') {
 			return Overlay_Result{dismiss = true}
 		}
-	case .Settings:
-		if key.code == .Up do overlay.selected = max(overlay.selected - 1, 0)
-		if key.code == .Down do overlay.selected = min(overlay.selected + 1, 3)
-		if key.code == .Rune && (key.rune == 'q' || key.rune == ',') do return Overlay_Result{dismiss = true}
-		setting := Setting_Action.None
-		if key.code == .Enter || (key.code == .Rune && key.rune == ' ') do setting = Setting_Action(overlay.selected + 1)
-		if key.code == .Rune {
-			switch key.rune {
-			case 'i': setting = .Icons
-			case '.': setting = .Hidden
-			case 'g': setting = .Git_Decorations
-			case 's': setting = .Start_Tab
-			}
-		}
-		if setting != .None do return Overlay_Result{setting = setting}
 	case .None:
 	}
 	return {}
@@ -165,7 +128,6 @@ overlay_rect :: proc(overlay: ^Overlay, width, height: int) -> tui.Rect {
 	panel_width := min(max(tui.text_width(overlay.title) + 8, 32), width - 2)
 	panel_height := 4
 	if overlay.kind == .Menu do panel_height = min(len(overlay.entries) + 2, height - 2)
-	if overlay.kind == .Settings do panel_height = min(13, height - 2)
 	x := min(2, max(width - panel_width, 0))
 	y := min(HEADER_HEIGHT + 1, max(height - panel_height, 0))
 	return tui.Rect{x = x, y = y, width = panel_width, height = panel_height}
@@ -212,30 +174,6 @@ overlay_render :: proc(overlay: ^Overlay, buffer: ^tui.Buffer) {
 		tui.buffer_draw_text(buffer, x + 4, y + 1, input, panel, width - 6)
 	case .Confirm:
 		tui.buffer_draw_text(buffer, x + 2, y + 1, "y confirm · n cancel", panel, width - 4)
-	case .Settings:
-		lines := [?]string{
-			fmt.aprintf(" Icon theme         %s", overlay.settings_icons),
-			fmt.aprintf(" Hidden files       %s", overlay.settings_hidden ? "shown" : "hidden"),
-			fmt.aprintf(" Git decorations    %s", overlay.settings_git ? "shown" : "hidden"),
-			fmt.aprintf(" Start tab          %s", overlay.settings_start),
-		}
-		defer {
-			for line in lines do delete(line)
-		}
-		for line, index in lines {
-			style := panel
-			if index == overlay.selected do style = selected
-			overlay_fill(buffer, tui.Rect{x = x + 1, y = y + index + 1, width = width - 2, height = 1}, style)
-			tui.buffer_draw_text(buffer, x + 1, y + index + 1, line, style, width - 2)
-		}
-		hotkey_y := y + 6
-		if hotkey_y < y + height - 1 {
-			tui.buffer_draw_text(buffer, x + 2, hotkey_y, "Hotkeys", tui.Style{attrs = {.Bold}}, width - 4)
-			tui.buffer_draw_text(buffer, x + 3, hotkey_y + 1, "↑↓ move   ←→ fold", tui.Style{attrs = {.Dim}}, width - 5)
-			tui.buffer_draw_text(buffer, x + 3, hotkey_y + 2, "⏎ toggle  r refresh", tui.Style{attrs = {.Dim}}, width - 5)
-			tui.buffer_draw_text(buffer, x + 3, hotkey_y + 3, ". dotfiles  m menu", tui.Style{attrs = {.Dim}}, width - 5)
-			tui.buffer_draw_text(buffer, x + 2, hotkey_y + 4, "click/⏎ toggle · esc close", tui.Style{attrs = {.Dim}}, width - 4)
-		}
 	case .None:
 	}
 }

@@ -12,8 +12,6 @@ test_preferences_round_trip :: proc(t: ^testing.T) {
 	defer { _ = os.remove_all(root); delete(root) }
 	preferences: Preferences
 	preferences_init(&preferences, root)
-	delete(preferences.icons)
-	preferences.icons = strings.clone("material")
 	preferences.hidden = true
 	delete(preferences.start_tab)
 	preferences.start_tab = strings.clone("graph")
@@ -25,7 +23,6 @@ test_preferences_round_trip :: proc(t: ^testing.T) {
 	preferences_init(&loaded, root)
 	defer preferences_destroy(&loaded)
 	testing.expect(t, preferences_load(&loaded))
-	testing.expect_value(t, loaded.icons, "material")
 	testing.expect(t, loaded.hidden)
 	testing.expect_value(t, loaded.start_tab, "graph")
 	paths := preferences_expanded(&loaded, root)
@@ -39,8 +36,5 @@ test_preferences_reject_invalid_theme :: proc(t: ^testing.T) {
 	preferences: Preferences
 	preferences_init(&preferences, "/tmp/trek-settings-invalid")
 	defer preferences_destroy(&preferences)
-	delete(preferences.icons)
-	preferences.icons = strings.clone("unknown")
 	preferences_validate(&preferences)
-	testing.expect_value(t, preferences.icons, "")
 }

@@ -175,7 +175,7 @@ test_explorer_row_matches_reference_anatomy :: proc(t: ^testing.T) {
 	dir := tabs_test_join(root, "src")
 	defer delete(dir)
 	_ = os.make_directory(dir)
-	state := tree_tab_new(root, .Material)
+	state := tree_tab_new(root)
 	defer tree_destroy_proc(rawptr(state))
 	rows := tree_rows_proc(rawptr(state), context.allocator)
 	defer rows_destroy(&rows)
@@ -187,8 +187,9 @@ test_explorer_row_matches_reference_anatomy :: proc(t: ^testing.T) {
 	tui.layout_init(&layout)
 	defer tui.layout_destroy(&layout)
 	tui.render_node(&buffer, &layout, &rows[0].node, tui.Rect{width = 40, height = 1}, tui.PLAIN_STYLE)
+	// Anatomy at depth 0: no guides, chevron (2), icon, gap, name.
 	arrow, arrow_ok := tui.buffer_get(&buffer, 0, 0)
-	icon, icon_ok := tui.buffer_get(&buffer, 4, 0)
+	icon, icon_ok := tui.buffer_get(&buffer, 2, 0)
 	testing.expect(t, arrow_ok && icon_ok)
 	testing.expect_value(t, arrow.rune, '▸')
 	testing.expect_value(t, icon.rune, '\uf07b')
@@ -199,7 +200,7 @@ test_explorer_row_matches_reference_anatomy :: proc(t: ^testing.T) {
 test_source_control_rows_match_reference_shapes :: proc(t: ^testing.T) {
 	root := tabs_test_repo(t)
 	defer { _ = os.remove_all(root); delete(root) }
-	state := changes_new(root, model.Icon_Theme.Material)
+	state := changes_new(root)
 	defer changes_destroy_proc(rawptr(state))
 	rows := changes_rows_proc(rawptr(state), context.allocator)
 	defer rows_destroy(&rows)

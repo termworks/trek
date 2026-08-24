@@ -29,11 +29,8 @@ table_bool :: proc(L: ^clua.State, table: c.int, field: cstring, fallback: bool)
 }
 
 engine_read_settings :: proc(engine: ^Engine, trek_index: c.int) {
-	delete(engine.settings.icons)
 	delete(engine.settings.start_tab)
-	engine.settings.icons = table_string(engine.state, trek_index, "icons", engine.allocator)
 	engine.settings.hidden = table_bool(engine.state, trek_index, "hidden", false)
-	engine.settings.git_decorations = table_bool(engine.state, trek_index, "git_decorations", true)
 	engine.settings.start_tab = table_string(engine.state, trek_index, "start_tab", engine.allocator)
 }
 
@@ -90,15 +87,11 @@ engine_read_api :: proc(engine: ^Engine) -> bool {
 	return true
 }
 
-engine_apply_defaults :: proc(engine: ^Engine, icons: string, hidden, git_decorations: bool, start_tab: string) -> bool {
+engine_apply_defaults :: proc(engine: ^Engine, hidden: bool, start_tab: string) -> bool {
 	L := engine.state
 	if !get_trek(L) do return false
-	push_string(L, icons)
-	clua.setfield(L, -2, "icons")
 	clua.pushboolean(L, b32(hidden))
 	clua.setfield(L, -2, "hidden")
-	clua.pushboolean(L, b32(git_decorations))
-	clua.setfield(L, -2, "git_decorations")
 	push_string(L, start_tab)
 	clua.setfield(L, -2, "start_tab")
 	clua.pop(L, 1)
