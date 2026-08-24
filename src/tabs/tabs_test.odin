@@ -36,7 +36,7 @@ tabs_test_repo :: proc(t: ^testing.T) -> string {
 }
 
 @(test)
-test_changes_rows_have_sections_and_commit_box :: proc(t: ^testing.T) {
+test_changes_rows_have_three_sections_and_commit_box :: proc(t: ^testing.T) {
 	root := tabs_test_repo(t)
 	defer { _ = os.remove_all(root); delete(root) }
 	tracked := tabs_test_join(root, "tracked.txt")
@@ -51,7 +51,7 @@ test_changes_rows_have_sections_and_commit_box :: proc(t: ^testing.T) {
 	defer rows_destroy(&rows)
 	commit_boxes := 0
 	commit_buttons := 0
-	drawers := 0
+	sections := 0
 	entries := 0
 	for row in rows {
 		if row.kind == .Commit_Box {
@@ -59,18 +59,18 @@ test_changes_rows_have_sections_and_commit_box :: proc(t: ^testing.T) {
 			testing.expect_value(t, row.height, 3)
 		}
 		if row.kind == .Commit_Button do commit_buttons += 1
-		if row.kind == .Drawer_Header do drawers += 1
+		if row.kind == .Section_Header do sections += 1
 		if row.kind == .Git_Entry do entries += 1
 	}
-	testing.expect_value(t, len(state.repos), 1)
+	// A modified tracked file and an untracked one: NEW and MODIFIED, nothing staged.
+	testing.expect_value(t, sections, 2)
+	testing.expect_value(t, entries, 2)
 	testing.expect_value(t, commit_boxes, 1)
 	testing.expect_value(t, commit_buttons, 1)
-	testing.expect_value(t, drawers, 8)
-	testing.expect_value(t, entries, 2)
 }
 
 @(test)
-test_changes_plain_enter_commits_message :: proc(t: ^testing.T) {
+test_changes_enter_moves_entry_between_sections :: proc(t: ^testing.T) {
 	root := tabs_test_repo(t)
 	defer { _ = os.remove_all(root); delete(root) }
 	new_file := tabs_test_join(root, "new.txt")
@@ -78,17 +78,61 @@ test_changes_plain_enter_commits_message :: proc(t: ^testing.T) {
 	_ = os.write_entire_file_from_string(new_file, "new")
 	state := changes_new(root)
 	defer changes_destroy_proc(rawptr(state))
-	message, staged := gitcore.repo_stage_all(&state.repos[0].repo)
+	testing.expect_value(t, len(state.status.staged), 0)
+	row := Row{kind = .Git_Entry, path = "new.txt", staged = false}
+	result := changes_select_proc(rawptr(state), &row)
+	testing.expect(t, result.rows_changed)
+	testing.expect_value(t, result.message, "staged")
+	testing.expect_value(t, len(state.status.staged), 1)
+	testing.expect_value(t, len(state.status.unstaged), 0)
+	// And back again from the staged side.
+	back := Row{kind = .Git_Entry, path = "new.txt", staged = true}
+	result = changes_select_proc(rawptr(state), &back)
+	testing.expect_value(t, result.message, "unstaged")
+	testing.expect_value(t, len(state.status.staged), 0)
+	testing.expect_value(t, len(state.status.unstaged), 1)
+}
+
+@(test)
+test_changes_commit_button_commits_staged :: proc(t: ^testing.T) {
+	root := tabs_test_repo(t)
+	defer { _ = os.remove_all(root); delete(root) }
+	new_file := tabs_test_join(root, "new.txt")
+	defer delete(new_file)
+	_ = os.write_entire_file_from_string(new_file, "new")
+	state := changes_new(root)
+	defer changes_destroy_proc(rawptr(state))
+	message, staged := gitcore.repo_stage_all(&state.repo)
 	delete(message)
 	testing.expect(t, staged)
 	changes_refresh(state)
-	append(&state.repos[0].message, "add new file")
-	row := Row{kind = .Commit_Box, repo_index = 0}
+	append(&state.message, "add new file")
+	row := Row{kind = .Commit_Button}
 	result := changes_select_proc(rawptr(state), &row)
 	testing.expect(t, result.rows_changed)
 	testing.expect_value(t, result.message, "committed")
-	testing.expect_value(t, len(state.repos[0].status.staged), 0)
-	testing.expect_value(t, len(state.repos[0].status.unstaged), 0)
+	testing.expect_value(t, len(state.status.staged), 0)
+	testing.expect_value(t, len(state.status.unstaged), 0)
+}
+
+@(test)
+test_changes_commit_refuses_empty_message :: proc(t: ^testing.T) {
+	root := tabs_test_repo(t)
+	defer { _ = os.remove_all(root); delete(root) }
+	new_file := tabs_test_join(root, "new.txt")
+	defer delete(new_file)
+	_ = os.write_entire_file_from_string(new_file, "new")
+	state := changes_new(root)
+	defer changes_destroy_proc(rawptr(state))
+	message, staged := gitcore.repo_stage_all(&state.repo)
+	delete(message)
+	testing.expect(t, staged)
+	changes_refresh(state)
+	row := Row{kind = .Commit_Button}
+	result := changes_select_proc(rawptr(state), &row)
+	testing.expect(t, !result.rows_changed)
+	testing.expect_value(t, result.message, "commit message is empty")
+	testing.expect_value(t, len(state.status.staged), 1)
 }
 
 @(test)
@@ -97,33 +141,12 @@ test_changes_commit_box_accepts_text_and_paste :: proc(t: ^testing.T) {
 	defer { _ = os.remove_all(root); delete(root) }
 	state := changes_new(root)
 	defer changes_destroy_proc(rawptr(state))
-	row := Row{kind = .Commit_Box, repo_index = 0}
+	row := Row{kind = .Commit_Box}
 	_ = changes_key_proc(rawptr(state), tui.Key{code = .Rune, rune = 'h'}, &row)
 	_ = changes_paste_proc(rawptr(state), "ello", &row)
-	testing.expect_value(t, string(state.repos[0].message[:]), "hello")
+	testing.expect_value(t, string(state.message[:]), "hello")
 	_ = changes_key_proc(rawptr(state), tui.Key{code = .Backspace}, &row)
-	testing.expect_value(t, string(state.repos[0].message[:]), "hell")
-}
-
-@(test)
-test_changes_discovers_child_repositories :: proc(t: ^testing.T) {
-	root := tabs_test_root(t)
-	defer { _ = os.remove_all(root); delete(root) }
-	inner := tabs_test_join(root, "vendor/inner")
-	defer delete(inner)
-	_ = os.make_directory_all(inner)
-	tabs_test_git(t, root, []string{"init", "-q"})
-	tabs_test_git(t, inner, []string{"init", "-q"})
-	state := changes_new(root)
-	defer changes_destroy_proc(rawptr(state))
-	testing.expect_value(t, len(state.repos), 2)
-	rows := changes_rows_proc(rawptr(state), context.allocator)
-	defer rows_destroy(&rows)
-	boxes := 0
-	for row in rows {
-		if row.kind == .Commit_Box do boxes += 1
-	}
-	testing.expect_value(t, boxes, 2)
+	testing.expect_value(t, string(state.message[:]), "hell")
 }
 
 @(test)
@@ -201,10 +224,27 @@ test_source_control_rows_match_reference_shapes :: proc(t: ^testing.T) {
 	testing.expect_value(t, top_left.rune, '┌')
 	testing.expect_value(t, top_right.rune, '┐')
 	testing.expect_value(t, bottom_left.rune, '└')
+	// The button is one row and renders dim until something is actually staged.
 	tui.buffer_clear(&buffer)
-	tui.render_node(&buffer, &layout, &button.node, tui.Rect{width = 40, height = 3}, tui.PLAIN_STYLE)
-	button_cell, _ := tui.buffer_get(&buffer, 10, 1)
-	testing.expect_value(t, button_cell.style.bg, tui.BUTTON_BG)
+	tui.render_node(&buffer, &layout, &button.node, tui.Rect{width = 40, height = 1}, tui.PLAIN_STYLE)
+	idle, _ := tui.buffer_get(&buffer, 20, 0)
+	testing.expect_value(t, idle.style.bg, tui.DEFAULT_COLOR)
+	staged_file := tabs_test_join(root, "staged.txt")
+	defer delete(staged_file)
+	_ = os.write_entire_file_from_string(staged_file, "x")
+	output, ok := gitcore.repo_stage_all(&state.repo)
+	delete(output)
+	testing.expect(t, ok)
+	changes_refresh(state)
+	live := changes_rows_proc(rawptr(state), context.allocator)
+	defer rows_destroy(&live)
+	for &row in live {
+		if row.kind != .Commit_Button do continue
+		tui.buffer_clear(&buffer)
+		tui.render_node(&buffer, &layout, &row.node, tui.Rect{width = 40, height = 1}, tui.PLAIN_STYLE)
+		cell, _ := tui.buffer_get(&buffer, 20, 0)
+		testing.expect_value(t, cell.style.bg, tui.BUTTON_BG)
+	}
 }
 
 @(test)

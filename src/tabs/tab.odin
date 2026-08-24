@@ -6,13 +6,11 @@ import tui "../tui"
 
 Row_Kind :: enum {
 	Generic,
-	Repo_Header,
 	Commit_Box,
 	Commit_Button,
 	Section_Header,
 	Git_Entry,
 	Graph_Commit,
-	Drawer_Header,
 }
 
 Row :: struct {
@@ -24,7 +22,6 @@ Row :: struct {
 	is_dir:     bool,
 	expanded:   bool,
 	kind:       Row_Kind,
-	repo_index: int,
 	entry_index: int,
 	staged:     bool,
 	input_value: string,
