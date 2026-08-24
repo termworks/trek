@@ -77,6 +77,34 @@ walks into a folder and re-roots the view there, `←` goes back up, and the
 header shows the full path rather than the folder name. Nothing is nested, so
 there are no guides and no expanded state to keep.
 
+
+### Sizing and placement
+
+By default trek fills the terminal. Give it a size and it becomes a box placed
+inside one, which is useful when the terminal is far larger than the tree you
+are reading:
+
+```sh
+trek --width 60 --height 18                  # centred
+trek --width 40 --align bottom-right         # a corner panel, full height
+```
+
+| setting | |
+|---|---|
+| `--width N` / `trek.width` | viewport columns; `0` or absent fills the terminal |
+| `--height N` / `trek.height` | viewport rows |
+| `--align WHERE` / `trek.align` | `center` (default), `top-left`, `top-right`, `bottom-left`, `bottom-right` |
+| `trek.border` | frame the box when it does not fill the terminal (default `true`) |
+
+A size larger than the terminal is clamped rather than clipped, so a config
+written for a big screen still works on a small one. Command-line flags win over
+the config file.
+
+```lua
+trek.width = 46
+trek.height = 12
+trek.align = "bottom-right"
+```
 ### Following trek from a shell
 
 A child process cannot change its parent's working directory, which is why

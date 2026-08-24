@@ -32,6 +32,11 @@ engine_read_settings :: proc(engine: ^Engine, trek_index: c.int) {
 	delete(engine.settings.start_tab)
 	engine.settings.hidden = table_bool(engine.state, trek_index, "hidden", false)
 	engine.settings.start_tab = table_string(engine.state, trek_index, "start_tab", engine.allocator)
+	engine.settings.width = table_int(engine.state, trek_index, "width", 0)
+	engine.settings.height = table_int(engine.state, trek_index, "height", 0)
+	delete(engine.settings.align)
+	engine.settings.align = table_string(engine.state, trek_index, "align", engine.allocator)
+	engine.settings.border = table_bool(engine.state, trek_index, "border", true)
 }
 
 engine_read_tabs :: proc(engine: ^Engine, trek_index: c.int) {

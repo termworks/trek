@@ -3,6 +3,7 @@ package main
 import "core:fmt"
 import "core:os"
 import "core:path/filepath"
+import "core:strconv"
 import "core:strings"
 import luaconfig "./lua"
 import model "./model"
@@ -17,6 +18,9 @@ Options :: struct {
 	root:      string,
 	cwd_file:  string,
 	explore:   bool,
+	width:     int,
+	height:    int,
+	align:     string,
 	help:      bool,
 	version:   bool,
 	error:     string,
@@ -33,6 +37,25 @@ parse_options :: proc(args: []string, default_root: string) -> Options {
 		case "-h", "--help": options.help = true
 		case "-V", "--version": options.version = true
 		case "-e", "--explore": options.explore = true
+		case "--width", "--height", "--align":
+			if index >= len(args) {
+				options.error = "option needs a value"
+				break
+			}
+			value := args[index]
+			index += 1
+			if arg == "--align" {
+				options.align = value
+				break
+			}
+			number, parsed := strconv.parse_int(value)
+			if !parsed || number < 0 {
+				options.error = "size must be a positive number"
+			} else if arg == "--width" {
+				options.width = number
+			} else {
+				options.height = number
+			}
 		case "--cwd-file":
 			// Where trek reports the directory it finished in. A child process cannot
 			// change its parent's working directory, so a shell that wants to follow
@@ -66,6 +89,9 @@ usage :: proc() {
 	fmt.println("Options:")
 	fmt.println("  -e, --explore        start in explorer mode (walk into directories)")
 	fmt.println("      --cwd-file PATH  write the directory trek finished in to PATH")
+	fmt.println("      --width N        viewport columns (default: the terminal)")
+	fmt.println("      --height N       viewport rows (default: the terminal)")
+	fmt.println("      --align WHERE    center, top-left, top-right, bottom-left, bottom-right")
 	fmt.println("  -h, --help           show this help")
 	fmt.println("  -V, --version        show the version")
 	fmt.println("")
@@ -158,6 +184,20 @@ run_tui :: proc(root: string, options: Options) -> bool {
 		delete(message)
 	}
 
+	// CLI overrides config, and config overrides filling the terminal.
+	width_setting := options.width if options.width > 0 else config.settings.width
+	height_setting := options.height if options.height > 0 else config.settings.height
+	align_name := options.align if options.align != "" else config.settings.align
+	align_setting, _ := tui.align_parse(align_name)
+	border_setting := config.settings.border
+	// The shell always draws into a buffer of its own size starting at 0,0. When that
+	// is smaller than the terminal it is blitted into place, so nothing in the shell
+	// has to know it is not filling the screen.
+	content: tui.Buffer
+	tui.buffer_init(&content, buffer.width, buffer.height)
+	defer tui.buffer_destroy(&content)
+	view := tui.Rect{width = buffer.width, height = buffer.height}
+
 	input: [4096]byte
 	for !shell.quit && !tui.terminal_should_exit() {
 		free_all(context.temp_allocator)
@@ -167,10 +207,23 @@ run_tui :: proc(root: string, options: Options) -> bool {
 				tui.buffer_resize(&buffer, new_width, new_height)
 			}
 		}
-		ui.shell_render(&shell, &buffer, &layout)
+		view = tui.viewport_rect(buffer.width, buffer.height, width_setting, height_setting, align_setting)
+		inner := view
+		framed := border_setting && (view.width < buffer.width || view.height < buffer.height)
+		if framed {
+			inner.x += 1
+			inner.y += 1
+			inner.width = max(inner.width - 2, 0)
+			inner.height = max(inner.height - 2, 0)
+		}
+		tui.buffer_resize(&content, inner.width, inner.height)
+		ui.shell_render(&shell, &content, &layout)
+		tui.buffer_clear(&buffer)
+		if framed do tui.draw_frame(&buffer, view, tui.Style{fg = tui.RAMP_BORDER})
+		tui.buffer_blit(&buffer, &content, inner.x, inner.y)
 		if !tui.buffer_flush(&buffer) do return false
-		cursor_x, cursor_y, cursor_visible := ui.shell_cursor_position(&shell, buffer.width, buffer.height)
-		tui.terminal_cursor(cursor_visible, cursor_x, cursor_y)
+		cursor_x, cursor_y, cursor_visible := ui.shell_cursor_position(&shell, content.width, content.height)
+		tui.terminal_cursor(cursor_visible, cursor_x + inner.x, cursor_y + inner.y)
 		count, input_state := tui.terminal_read(input[:])
 		switch input_state {
 		case .Timeout: continue
@@ -198,11 +251,19 @@ run_tui :: proc(root: string, options: Options) -> bool {
 						delete(message)
 					}
 				} else {
-					ui.shell_key(&shell, event.key, ui.shell_viewport_height(buffer.height))
+					ui.shell_key(&shell, event.key, ui.shell_viewport_height(content.height))
 				}
 				ui.shell_apply_lua_pending(&shell)
 				if !run_suspended(&config, &terminal, &buffer) do return false
-			case .Mouse: ui.shell_mouse(&shell, event.mouse, buffer.width, buffer.height)
+			case .Mouse:
+				// The shell thinks in viewport coordinates, so shift the click in before
+				// dispatching and drop anything outside the box entirely.
+				local := event.mouse
+				local.x -= inner.x
+				local.y -= inner.y
+				if local.x >= 0 && local.y >= 0 && local.x < content.width && local.y < content.height {
+					ui.shell_mouse(&shell, local, content.width, content.height)
+				}
 			case .Paste: ui.shell_paste(&shell, event.text)
 			}
 		}

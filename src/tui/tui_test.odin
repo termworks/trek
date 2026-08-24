@@ -148,3 +148,46 @@ test_decoder_handles_split_sequences :: proc(t: ^testing.T) {
 	}
 	testing.expect_value(t, len(split.pending), 0)
 }
+
+// A configured size that is absent, zero, or larger than the terminal all mean
+// "fill it": a size setting must never shrink trek by accident.
+@(test)
+test_viewport_rect_places_and_clamps :: proc(t: ^testing.T) {
+	full := viewport_rect(100, 30, 0, 0, .Center)
+	testing.expect_value(t, full, Rect{x = 0, y = 0, width = 100, height = 30})
+
+	oversized := viewport_rect(40, 10, 200, 200, .Center)
+	testing.expect_value(t, oversized, Rect{x = 0, y = 0, width = 40, height = 10})
+
+	centered := viewport_rect(100, 30, 60, 18, .Center)
+	testing.expect_value(t, centered, Rect{x = 20, y = 6, width = 60, height = 18})
+
+	testing.expect_value(t, viewport_rect(60, 16, 30, 8, .Top_Left), Rect{x = 0, y = 0, width = 30, height = 8})
+	testing.expect_value(t, viewport_rect(60, 16, 30, 8, .Top_Right), Rect{x = 30, y = 0, width = 30, height = 8})
+	testing.expect_value(t, viewport_rect(60, 16, 30, 8, .Bottom_Left), Rect{x = 0, y = 8, width = 30, height = 8})
+	testing.expect_value(t, viewport_rect(60, 16, 30, 8, .Bottom_Right), Rect{x = 30, y = 8, width = 30, height = 8})
+}
+
+@(test)
+test_blit_copies_and_clips :: proc(t: ^testing.T) {
+	dst: Buffer
+	buffer_init(&dst, 10, 4)
+	defer buffer_destroy(&dst)
+	src: Buffer
+	buffer_init(&src, 3, 2)
+	defer buffer_destroy(&src)
+	for x in 0 ..< 3 do for y in 0 ..< 2 do buffer_set(&src, x, y, Cell{rune = 'x'})
+
+	buffer_blit(&dst, &src, 2, 1)
+	placed, _ := buffer_get(&dst, 2, 1)
+	testing.expect_value(t, placed.rune, 'x')
+	outside, _ := buffer_get(&dst, 1, 1)
+	testing.expect(t, outside.rune != 'x')
+
+	// Anything past the edge is dropped rather than wrapping onto the next row.
+	buffer_blit(&dst, &src, 9, 3)
+	edge, _ := buffer_get(&dst, 9, 3)
+	testing.expect_value(t, edge.rune, 'x')
+	wrapped, _ := buffer_get(&dst, 0, 0)
+	testing.expect(t, wrapped.rune != 'x')
+}
