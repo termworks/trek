@@ -191,7 +191,7 @@ tree_action_proc :: proc(data: rawptr, selected: ^Row, action: model.Action, val
 	defer delete(parent)
 	target_dir := parent
 	if selected.is_dir do target_dir = selected.path
-	switch action {
+	#partial switch action {
 	case .New_File, .New_Folder:
 		if _, ok := model.validate_name(value); !ok do return Tab_Result{message = "invalid name"}
 		path, _ := filepath.join([]string{target_dir, value}, context.allocator)

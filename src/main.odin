@@ -74,7 +74,7 @@ run_tui :: proc(root: string) -> bool {
 	ui.shell_init(&shell)
 	defer ui.shell_destroy(&shell)
 	ui.shell_add_tab(&shell, tabs.tree_tab(root))
-	ui.shell_add_tab(&shell, tabs.changes_tab())
+	ui.shell_add_tab(&shell, tabs.changes_tab(root))
 	ui.shell_add_tab(&shell, tabs.graph_tab())
 
 	input: [4096]byte

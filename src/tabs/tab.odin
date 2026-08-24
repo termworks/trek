@@ -4,6 +4,15 @@ import "base:runtime"
 import model "../model"
 import tui "../tui"
 
+Row_Kind :: enum {
+	Generic,
+	Repo_Header,
+	Commit_Box,
+	Section_Header,
+	Git_Entry,
+	Graph_Commit,
+}
+
 Row :: struct {
 	id:         string,
 	path:       string,
@@ -12,6 +21,10 @@ Row :: struct {
 	height:     int,
 	is_dir:     bool,
 	expanded:   bool,
+	kind:       Row_Kind,
+	repo_index: int,
+	entry_index: int,
+	staged:     bool,
 	node:       tui.Node,
 }
 
@@ -37,6 +50,8 @@ Select_Proc :: proc(data: rawptr, selected: ^Row) -> Tab_Result
 Menu_Proc :: proc(data: rawptr, selected: ^Row) -> []model.Menu_Entry
 Action_Proc :: proc(data: rawptr, selected: ^Row, action: model.Action, value: string) -> Tab_Result
 Destroy_Proc :: proc(data: rawptr)
+Focus_Proc :: proc(data: rawptr) -> Tab_Result
+Paste_Proc :: proc(data: rawptr, value: string, selected: ^Row) -> Tab_Result
 
 Tab :: struct {
 	name:      string,
@@ -49,6 +64,8 @@ Tab :: struct {
 	menu:      Menu_Proc,
 	action:    Action_Proc,
 	destroy:   Destroy_Proc,
+	on_focus:  Focus_Proc,
+	on_paste:  Paste_Proc,
 }
 
 tab_rows :: proc(tab: ^Tab, allocator := context.allocator) -> [dynamic]Row {
@@ -79,4 +96,14 @@ tab_action :: proc(tab: ^Tab, selected: ^Row, action: model.Action, value := "")
 tab_destroy :: proc(tab: ^Tab) {
 	if tab.destroy != nil do tab.destroy(tab.data)
 	tab^ = {}
+}
+
+tab_focus :: proc(tab: ^Tab) -> Tab_Result {
+	if tab.on_focus == nil do return {}
+	return tab.on_focus(tab.data)
+}
+
+tab_paste :: proc(tab: ^Tab, value: string, selected: ^Row) -> Tab_Result {
+	if tab.on_paste == nil do return {}
+	return tab.on_paste(tab.data, value, selected)
 }

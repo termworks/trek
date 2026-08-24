@@ -95,6 +95,58 @@ repo_stage_entry :: proc(repo: ^Git_Repo, entry: ^File_Entry, allocator := conte
 	return run_checked(repo, args[:], allocator)
 }
 
+repo_stage_all :: proc(repo: ^Git_Repo, allocator := context.allocator) -> (string, bool) {
+	return run_checked(repo, []string{"add", "-A"}, allocator)
+}
+
+repo_has_head :: proc(repo: ^Git_Repo, allocator := context.allocator) -> bool {
+	message, ok := run_checked(repo, []string{"rev-parse", "--verify", "HEAD"}, allocator)
+	delete(message, allocator)
+	return ok
+}
+
+repo_unstage_entry :: proc(repo: ^Git_Repo, entry: ^File_Entry, allocator := context.allocator) -> (string, bool) {
+	args := make([dynamic]string, 0, 6, allocator)
+	defer delete(args)
+	append(&args, "reset", "-q", "--", entry.path)
+	if entry.original != "" do append(&args, entry.original)
+	message, ok := run_checked(repo, args[:], allocator)
+	if ok do return message, true
+	if repo_has_head(repo, allocator) do return message, false
+	delete(message, allocator)
+	return run_checked(repo, []string{"rm", "--cached", "-r", "-q", "--", entry.path}, allocator)
+}
+
+repo_unstage_all :: proc(repo: ^Git_Repo, allocator := context.allocator) -> (string, bool) {
+	message, ok := run_checked(repo, []string{"reset", "-q"}, allocator)
+	if ok do return message, true
+	if repo_has_head(repo, allocator) do return message, false
+	delete(message, allocator)
+	return run_checked(repo, []string{"rm", "--cached", "-r", "-q", "--", "."}, allocator)
+}
+
+repo_discard :: proc(repo: ^Git_Repo, entry: ^File_Entry, allocator := context.allocator) -> (string, bool) {
+	if entry.letter == 'U' {
+		return run_checked(repo, []string{"clean", "-fd", "--", entry.path}, allocator)
+	}
+	args := make([dynamic]string, 0, 5, allocator)
+	defer delete(args)
+	append(&args, "checkout", "--", entry.path)
+	if entry.original != "" do append(&args, entry.original)
+	return run_checked(repo, args[:], allocator)
+}
+
+repo_commit :: proc(repo: ^Git_Repo, message: string, allocator := context.allocator) -> (string, bool) {
+	if strings.trim_space(message) == "" do return strings.clone("commit message is empty", allocator), false
+	output := run(repo.root, []string{"commit", "-m", message}, allocator)
+	defer output_destroy(&output, allocator)
+	if !output_ok(&output) do return output_message(&output, allocator), false
+	text := strings.trim_space(string(output.stdout))
+	if newline := strings.index_byte(text, '\n'); newline >= 0 do text = text[:newline]
+	if text == "" do text = "committed"
+	return strings.clone(text, allocator), true
+}
+
 stage_under :: proc(repo: ^Git_Repo, target: string, allocator := context.allocator) -> (Stage_Result, string, bool) {
 	if target != repo.root && (!strings.has_prefix(target, repo.root) ||
 	   len(target) <= len(repo.root) || !os.is_path_separator(target[len(repo.root)])) {

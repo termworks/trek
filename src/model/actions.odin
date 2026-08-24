@@ -10,6 +10,9 @@ Action :: enum {
 	Copy_Path,
 	Copy_Relative_Path,
 	Stage_Changes,
+	Unstage_Changes,
+	Discard_Changes,
+	Commit,
 	Change_Folder,
 }
 
@@ -59,6 +62,15 @@ TREE_DIR_GIT_MENU := [?]Menu_Entry{
 	{id = "rename", label = "Rename", action = .Rename},
 	{id = "delete", label = "Delete", action = .Delete, danger = true},
 	{id = "change-folder", label = "Change Folder", action = .Change_Folder},
+}
+
+CHANGES_UNSTAGED_MENU := [?]Menu_Entry{
+	{id = "stage", label = "Stage Changes", action = .Stage_Changes},
+	{id = "discard", label = "Discard Changes", action = .Discard_Changes, danger = true},
+}
+
+CHANGES_STAGED_MENU := [?]Menu_Entry{
+	{id = "unstage", label = "Unstage Changes", action = .Unstage_Changes},
 }
 
 validate_name :: proc(name: string) -> (string, bool) {

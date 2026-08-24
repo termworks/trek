@@ -91,6 +91,9 @@ shell_switch_tab :: proc(shell: ^Shell, index: int) {
 	shell.selected = -1
 	shell.scroll = 0
 	shell.hover = -1
+	result := tabpkg.tab_focus(shell_active_tab(shell))
+	if result.message != "" do shell_set_footer(shell, result.message)
+	if result.quit do shell.quit = true
 	shell_reload(shell)
 }
 
@@ -171,6 +174,7 @@ action_needs_prompt :: proc(action: model.Action) -> (string, bool) {
 	case .New_Folder: return "New folder", true
 	case .Rename: return "Rename", true
 	case .Change_Folder: return "Change folder", true
+	case .Commit: return "Commit message", true
 	}
 	return "", false
 }
@@ -204,8 +208,9 @@ shell_overlay_result :: proc(shell: ^Shell, result: Overlay_Result) {
 			overlay_prompt(&shell.overlay, title, action, initial)
 			return
 		}
-		if action == .Delete {
+		if action == .Delete || action == .Discard_Changes {
 			overlay_confirm(&shell.overlay, "Delete permanently?", action)
+			if action == .Discard_Changes do shell.overlay.title = "Discard changes permanently?"
 			return
 		}
 	}
@@ -256,7 +261,11 @@ shell_key :: proc(shell: ^Shell, key: tui.Key, viewport: int) {
 }
 
 shell_paste :: proc(shell: ^Shell, value: string) {
-	overlay_paste(&shell.overlay, value)
+	if shell.overlay.kind != .None {
+		overlay_paste(&shell.overlay, value)
+		return
+	}
+	shell_apply_result(shell, tabpkg.tab_paste(shell_active_tab(shell), value, shell_selected_row(shell)))
 }
 
 shell_mouse :: proc(shell: ^Shell, mouse: tui.Mouse_Event, width, height: int) {
