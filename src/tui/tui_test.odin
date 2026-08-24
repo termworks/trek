@@ -323,3 +323,30 @@ test_wrap_path_handles_oversized_segments :: proc(t: ^testing.T) {
 	defer delete(joined)
 	testing.expect_value(t, joined, "a/reallyreallyreallylongsegment/b")
 }
+
+// Filenames break at the separators they are actually built from.
+@(test)
+test_wrap_name_breaks_at_separators :: proc(t: ^testing.T) {
+	lines := wrap_name("report-2026-01-summary.final.csv", 14)
+	defer destroy_lines(&lines)
+	for line in lines do testing.expectf(t, text_width(line) <= 14, "overflowed: %q", line)
+	joined := strings.concatenate(lines[:], context.allocator)
+	defer delete(joined)
+	testing.expect_value(t, joined, "report-2026-01-summary.final.csv")
+	for line, index in lines {
+		if index == len(lines) - 1 do break
+		last := line[len(line) - 1]
+		testing.expectf(t, last == '-' || last == '_' || last == '.' || last == '/', "broke mid-word: %q", line)
+	}
+}
+
+// A name with no separator at all still has to fit, so it hard-breaks.
+@(test)
+test_wrap_name_hard_breaks_when_it_must :: proc(t: ^testing.T) {
+	lines := wrap_name("aaaaaaaaaaaaaaaaaaaaaaaa", 8)
+	defer destroy_lines(&lines)
+	for line in lines do testing.expect(t, text_width(line) <= 8)
+	joined := strings.concatenate(lines[:], context.allocator)
+	defer delete(joined)
+	testing.expect_value(t, joined, "aaaaaaaaaaaaaaaaaaaaaaaa")
+}

@@ -484,3 +484,39 @@ test_changes_entry_wraps_long_paths :: proc(t: ^testing.T) {
 	defer delete(rest)
 	testing.expect_value(t, rest, "src/deeply/nested/subdirectory")
 }
+
+// A name too long for the pane wraps under itself. Filenames differ at the tail as
+// often as the head, so truncating hides what tells two of them apart.
+@(test)
+test_tree_row_wraps_long_names :: proc(t: ^testing.T) {
+	row := model.Tree_Row{name = "a-really-long-filename-for-testing.odin", is_dir = false}
+	testing.expect_value(t, tree_row_height(&row, 120), 1)
+	testing.expect(t, tree_row_height(&row, 30) > 1)
+
+	lines := tree_name_lines(&row, 30)
+	joined := strings.concatenate(lines[:], context.allocator)
+	defer delete(joined)
+	testing.expect_value(t, joined, "a-really-long-filename-for-testing.odin")
+	// Breaks land on the separators a filename actually uses.
+	for line, index in lines {
+		if index == len(lines) - 1 do break
+		last := line[len(line) - 1]
+		testing.expectf(t, last == '-' || last == '_' || last == '.', "broke mid-word: %q", line)
+	}
+}
+
+// A wrapped row keeps the tree structure beside it: the ancestors' pipes continue,
+// and this row's own column is blank when it is the last child.
+@(test)
+test_wrapped_tree_row_keeps_guides :: proc(t: ^testing.T) {
+	middle := model.Tree_Row{name = "x", depth = 2, ancestors = []bool{true}, is_last = false}
+	last := model.Tree_Row{name = "x", depth = 2, ancestors = []bool{true}, is_last = true}
+	middle_guides := tree_guides_continued(&middle, context.allocator)
+	defer delete(middle_guides)
+	last_guides := tree_guides_continued(&last, context.allocator)
+	defer delete(last_guides)
+	testing.expect_value(t, middle_guides, "│ │ ")
+	testing.expect_value(t, last_guides, "│   ")
+	// Both occupy the same columns, so a wrapped name never shifts sideways.
+	testing.expect_value(t, tui.text_width(middle_guides), tui.text_width(last_guides))
+}

@@ -229,6 +229,12 @@ wrap_words :: proc(value: string, width: int, allocator := context.allocator) ->
 // middle of a directory name, which is both ugly and ambiguous. A segment wider
 // than the line still has to break somewhere.
 wrap_path :: proc(value: string, width: int, allocator := context.allocator) -> [dynamic]string {
+	return wrap_after(value, width, "/", allocator)
+}
+
+// Wrap after any of `breakers`, falling back to a hard break only for a run that is
+// wider than the line on its own.
+wrap_after :: proc(value: string, width: int, breakers: string, allocator := context.allocator) -> [dynamic]string {
 	lines := make([dynamic]string, allocator)
 	if width <= 0 || value == "" {
 		append(&lines, strings.clone(value if width > 0 else "", allocator))
@@ -239,7 +245,7 @@ wrap_path :: proc(value: string, width: int, allocator := context.allocator) -> 
 	start := 0
 	for index := 0; index <= len(value); index += 1 {
 		// Cut after each separator, and once more at the end for the tail segment.
-		if index < len(value) && value[index] != '/' do continue
+		if index < len(value) && !strings.contains_rune(breakers, rune(value[index])) do continue
 		piece := value[start:min(index + 1, len(value))]
 		start = index + 1
 		piece_width := text_width(piece)
@@ -268,4 +274,11 @@ wrap_path :: proc(value: string, width: int, allocator := context.allocator) -> 
 		append(&lines, strings.clone(strings.to_string(current), allocator))
 	}
 	return lines
+}
+
+// Wrap a filename. Names break at the separators people actually use in them —
+// dashes, underscores and dots — so `report-2026-01.csv` splits after a dash rather
+// than through the middle of a word.
+wrap_name :: proc(value: string, width: int, allocator := context.allocator) -> [dynamic]string {
+	return wrap_after(value, width, "-_./", allocator)
 }

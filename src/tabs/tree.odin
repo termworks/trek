@@ -39,35 +39,82 @@ tree_guides :: proc(row: ^model.Tree_Row, allocator: runtime.Allocator) -> strin
 	return strings.to_string(builder)
 }
 
-tree_row_node :: proc(state: ^Tree_Tab, row: ^model.Tree_Row, allocator: runtime.Allocator) -> tui.Node {
+// The guide columns a wrapped line sits under: the same ancestors, plus this row's
+// own level. A row that is its parent's last child has nothing below it, so that
+// column becomes blank rather than a pipe.
+tree_guides_continued :: proc(row: ^model.Tree_Row, allocator: runtime.Allocator) -> string {
+	if row.depth == 0 do return strings.clone("", allocator)
+	builder := strings.builder_make(allocator)
+	for more in row.ancestors {
+		strings.write_string(&builder, more ? "│ " : "  ")
+	}
+	strings.write_string(&builder, row.is_last ? "  " : "│ ")
+	return strings.to_string(builder)
+}
+
+// Columns before the name: the guides, the disclosure chevron, the icon and a space.
+tree_prefix_width :: proc(row: ^model.Tree_Row) -> int {
+	guides := 0
+	if row.depth > 0 do guides = (len(row.ancestors) + 1) * 2
+	return guides + 4
+}
+
+// The name as it is drawn: directories carry a trailing separator.
+tree_display_name :: proc(row: ^model.Tree_Row, allocator: runtime.Allocator) -> string {
+	if row.is_dir do return strings.concatenate([]string{row.name, "/"}, allocator)
+	return strings.clone(row.name, allocator)
+}
+
+// A name too long for the pane wraps under itself rather than ending in an ellipsis.
+// Filenames differ at the end at least as often as at the start — `report-2026-01.csv`
+// against `report-2026-02.csv` — so cutting the tail hides exactly what identifies them.
+tree_name_lines :: proc(row: ^model.Tree_Row, width: int) -> [dynamic]string {
+	name := tree_display_name(row, context.temp_allocator)
+	room := max(width - tree_prefix_width(row) - 2, 8)
+	return tui.wrap_name(name, room, context.temp_allocator)
+}
+
+tree_row_height :: proc(row: ^model.Tree_Row, width: int) -> int {
+	return len(tree_name_lines(row, width))
+}
+
+tree_row_node :: proc(state: ^Tree_Tab, row: ^model.Tree_Row, width: int, allocator: runtime.Allocator) -> tui.Node {
 	chevron := "  "
 	if row.is_dir {
 		chevron = row.expanded ? "▾ " : "▸ "
 	}
 	icon := model.file_icon(row.name, row.is_dir, row.expanded)
 	icon_style := tree_icon_style(icon)
-	// A directory takes the accent for both glyph and name and carries a trailing
-	// separator; a file takes its own type colour for both, so icon and name always
-	// agree about what the row is.
+	// A directory takes the accent for both glyph and name; a file takes its own type
+	// colour for both, so icon and name always agree about what the row is.
 	name_style := icon_style
-	// The name node owns its string either way, so ownership does not depend on
-	// whether this row happened to be a directory.
-	name := strings.clone(row.name, allocator)
 	if row.is_dir {
 		icon_style = tui.Style{fg = tui.ACCENT}
 		name_style = tui.Style{fg = tui.ACCENT}
-		delete(name, allocator)
-		name = strings.concatenate([]string{row.name, "/"}, allocator)
 	}
-	content := tui.row([]tui.Node{
-		tui.owned_text(tree_guides(row, allocator), tui.Style{fg = tui.RAMP_BORDER, attrs = {.Dim}}),
-		tui.text(chevron, tui.Style{attrs = {.Dim}}),
-		tui.text(icon.glyph, icon_style),
-		tui.text(" "),
-		tui.priority(tui.truncate(tui.owned_text(name, name_style), 0), 0, allocator),
-		tui.spacer(),
-		tui.transparent(2),
-	}, allocator)
+	guide_style := tui.Style{fg = tui.RAMP_BORDER, attrs = {.Dim}}
+
+	lines := tree_name_lines(row, width)
+	rows := make([dynamic]tui.Node, allocator)
+	defer delete(rows)
+	for line, index in lines {
+		children := make([dynamic]tui.Node, allocator)
+		defer delete(children)
+		if index == 0 {
+			append(&children, tui.owned_text(tree_guides(row, allocator), guide_style))
+			append(&children, tui.text(chevron, tui.Style{attrs = {.Dim}}))
+			append(&children, tui.text(icon.glyph, icon_style))
+			append(&children, tui.text(" "))
+		} else {
+			append(&children, tui.owned_text(tree_guides_continued(row, allocator), guide_style))
+			append(&children, tui.priority(tui.transparent(4), 100, allocator))
+		}
+		append(&children, tui.owned_text(strings.clone(line, allocator), name_style))
+		append(&children, tui.spacer())
+		append(&children, tui.priority(tui.transparent(2), 100, allocator))
+		append(&rows, tui.row(children[:], allocator))
+	}
+	content := tui.column(rows[:], allocator)
 	return tui.region(content, row.path, []string{"open", "menu"}, allocator = allocator)
 }
 
@@ -81,10 +128,10 @@ tree_rows_proc :: proc(data: rawptr, width: int, allocator: runtime.Allocator) -
 			path = model_row.path,
 			depth = model_row.depth,
 			selectable = true,
-			height = 1,
+			height = tree_row_height(&model_row, width),
 			is_dir = model_row.is_dir,
 			expanded = model_row.expanded,
-			node = tree_row_node(state, &model_row, allocator),
+			node = tree_row_node(state, &model_row, width, allocator),
 		})
 		model_row.path = ""
 	}
