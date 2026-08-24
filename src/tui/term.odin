@@ -7,6 +7,7 @@ import "core:sys/posix"
 foreign import terminal_libc "system:c"
 
 foreign terminal_libc {
+	@(link_name = "ioctl")
 	terminal_ioctl :: proc(fd: c.int, request: c.ulong, size: ^Window_Size) -> c.int ---
 }
 
