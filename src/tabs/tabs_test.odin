@@ -315,3 +315,27 @@ test_rows_never_alias_id_and_path :: proc(t: ^testing.T) {
 	defer rows_destroy(&graph_rows)
 	expect_distinct_strings(t, graph_rows[:], "graph")
 }
+
+// The shell routes Enter to on_select, never to on_key, so the commit box has to be
+// handled there. Handling it only in changes_key_proc makes the box's own "⏎ to
+// commit" prompt a lie.
+@(test)
+test_changes_enter_in_message_box_commits :: proc(t: ^testing.T) {
+	root := tabs_test_repo(t)
+	defer { _ = os.remove_all(root); delete(root) }
+	fresh := tabs_test_join(root, "new.txt")
+	defer delete(fresh)
+	_ = os.write_entire_file_from_string(fresh, "new")
+	state := changes_new(root)
+	defer changes_destroy_proc(rawptr(state))
+	output, staged := gitcore.repo_stage_all(&state.repo)
+	delete(output)
+	testing.expect(t, staged)
+	changes_refresh(state)
+	append(&state.message, "from the box")
+	box := Row{kind = .Commit_Box}
+	result := changes_select_proc(rawptr(state), &box)
+	testing.expect(t, result.rows_changed)
+	testing.expect_value(t, result.message, "committed")
+	testing.expect_value(t, len(state.status.staged), 0)
+}

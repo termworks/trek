@@ -4,6 +4,7 @@ import "base:runtime"
 import "core:os"
 import "core:path/filepath"
 import "core:strings"
+import "core:time"
 
 Output :: struct {
 	stdout: []byte,
@@ -30,16 +31,104 @@ output_message :: proc(output: ^Output, allocator := context.allocator) -> strin
 	return strings.clone(text, allocator)
 }
 
-run :: proc(dir: string, args: []string, allocator := context.allocator) -> Output {
+// trek runs git from an interactive loop with nothing else driving the screen, so a
+// git that never returns freezes the whole application with no way out. A commit
+// hook is the realistic case: it can block on a lock, or on input it will never get.
+GIT_TIMEOUT :: 10 * time.Second
+
+// Poll interval while a command is in flight. Short enough that a fast git is not
+// noticeably delayed, long enough that waiting is not a spin.
+GIT_POLL :: 2 * time.Millisecond
+
+// Refuse to accumulate an unbounded amount of output. `git log` on a large history
+// runs to megabytes, and none of trek's callers can use more than this.
+GIT_MAX_OUTPUT :: 16 * 1024 * 1024
+
+@(private = "file")
+drain_pipe :: proc(reader: ^os.File, sink: ^[dynamic]byte) -> bool {
+	moved := false
+	scratch: [4096]byte
+	for {
+		has_data, has_err := os.pipe_has_data(reader)
+		if has_err != nil || !has_data do break
+		count, read_err := os.read(reader, scratch[:])
+		if count <= 0 || read_err != nil do break
+		if len(sink) < GIT_MAX_OUTPUT do append(sink, ..scratch[:count])
+		moved = true
+	}
+	return moved
+}
+
+// Run git with a deadline. Output is drained while the command runs: a pipe holds
+// only ~64KiB, so a caller that waits first and reads afterwards deadlocks against
+// any command that produces more than that.
+run :: proc(dir: string, args: []string, allocator := context.allocator, timeout := GIT_TIMEOUT) -> Output {
 	command := make([dynamic]string, 0, len(args) + 3, context.allocator)
 	defer delete(command)
 	append(&command, "git", "-c", "color.ui=false")
 	append(&command, ..args)
-	state, stdout, stderr, err := os.process_exec(os.Process_Desc{
+
+	stdout_r, stdout_w, stdout_err := os.pipe()
+	if stdout_err != nil do return Output{error = stdout_err}
+	stderr_r, stderr_w, stderr_err := os.pipe()
+	if stderr_err != nil {
+		os.close(stdout_r)
+		os.close(stdout_w)
+		return Output{error = stderr_err}
+	}
+
+	// stdin is closed, not inherited: a hook that prompts then reads EOF and fails
+	// instead of waiting on a terminal trek is already drawing over.
+	process, start_err := os.process_start(os.Process_Desc{
 		working_dir = dir,
 		command = command[:],
-	}, allocator)
-	return Output{stdout = stdout, stderr = stderr, state = state, error = err}
+		stdout = stdout_w,
+		stderr = stderr_w,
+	})
+	// The parent's write ends must close here or the readers never see EOF.
+	os.close(stdout_w)
+	os.close(stderr_w)
+	if start_err != nil {
+		os.close(stdout_r)
+		os.close(stderr_r)
+		return Output{error = start_err}
+	}
+
+	out := make([dynamic]byte, allocator)
+	errs := make([dynamic]byte, allocator)
+	started := time.now()
+	state: os.Process_State
+	timed_out := false
+	for {
+		moved := drain_pipe(stdout_r, &out)
+		moved |= drain_pipe(stderr_r, &errs)
+		polled, wait_err := os.process_wait(process, 0)
+		if wait_err == nil && polled.exited {
+			state = polled
+			break
+		}
+		if time.since(started) >= timeout {
+			_ = os.process_kill(process)
+			state, _ = os.process_wait(process)
+			timed_out = true
+			break
+		}
+		if !moved do time.sleep(GIT_POLL)
+	}
+	drain_pipe(stdout_r, &out)
+	drain_pipe(stderr_r, &errs)
+	os.close(stdout_r)
+	os.close(stderr_r)
+
+
+	result := Output{stdout = out[:], stderr = errs[:], state = state}
+	if timed_out {
+		result.error = .Timeout
+		clear(&errs)
+		append(&errs, ..transmute([]byte)string("git timed out"))
+		result.stderr = errs[:]
+	}
+	return result
 }
 
 Git_Repo :: struct {

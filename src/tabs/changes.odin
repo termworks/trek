@@ -229,9 +229,13 @@ changes_entry :: proc(state: ^Changes_Tab, row: ^Row) -> ^gitcore.File_Entry {
 	return nil
 }
 
+// Tab_Result.message is borrowed by the shell, which clones it: returning an
+// allocated git string here leaks it on every failure. Free it and report a fixed
+// phrase, keeping raw git text out of the UI at the same time.
 changes_operation_result :: proc(state: ^Changes_Tab, message: string, ok: bool, success: string) -> Tab_Result {
-	if !ok do return Tab_Result{message = message}
+	timed_out := message == "git timed out"
 	delete(message)
+	if !ok do return Tab_Result{message = timed_out ? "git timed out" : "git command failed"}
 	changes_refresh(state)
 	return Tab_Result{rows_changed = true, message = success}
 }
@@ -254,7 +258,11 @@ changes_commit :: proc(state: ^Changes_Tab) -> Tab_Result {
 	message := strings.trim_space(string(state.message[:]))
 	if message == "" do return Tab_Result{message = "commit message is empty"}
 	output, ok := gitcore.repo_commit(&state.repo, message, state.allocator)
-	if !ok do return Tab_Result{message = output}
+	if !ok {
+		timed_out := output == "git timed out"
+		delete(output)
+		return Tab_Result{message = timed_out ? "git timed out" : "commit failed"}
+	}
 	delete(output)
 	clear(&state.message)
 	changes_refresh(state)
@@ -266,7 +274,7 @@ changes_select_proc :: proc(data: rawptr, selected: ^Row) -> Tab_Result {
 	if selected == nil do return Tab_Result{}
 	#partial switch selected.kind {
 	case .Git_Entry: return changes_toggle(state, selected)
-	case .Commit_Button: return changes_commit(state)
+	case .Commit_Button, .Commit_Box: return changes_commit(state)
 	}
 	return Tab_Result{}
 }
@@ -287,7 +295,6 @@ changes_key_proc :: proc(data: rawptr, key: tui.Key, selected: ^Row) -> Tab_Resu
 	state := (^Changes_Tab)(data)
 	if selected != nil && selected.kind == .Commit_Box {
 		#partial switch key.code {
-		case .Enter: return changes_commit(state)
 		case .Backspace:
 			changes_backspace(&state.message)
 			return Tab_Result{rows_changed = true}
