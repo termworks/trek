@@ -60,6 +60,11 @@ buffer_clear :: proc(buffer: ^Buffer, style := PLAIN_STYLE) {
 	buffer.dirty = true
 }
 
+buffer_invalidate :: proc(buffer: ^Buffer) {
+	for index in 0 ..< len(buffer.previous) do buffer.previous[index] = Cell{rune = 0}
+	buffer.dirty = true
+}
+
 buffer_index :: proc(buffer: ^Buffer, x, y: int) -> (int, bool) {
 	if x < 0 || y < 0 || x >= buffer.width || y >= buffer.height {
 		return 0, false

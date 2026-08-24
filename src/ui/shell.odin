@@ -2,6 +2,7 @@ package ui
 
 import "base:runtime"
 import "core:strings"
+import luaconfig "../lua"
 import model "../model"
 import tabpkg "../tabs"
 import tui "../tui"
@@ -18,6 +19,8 @@ Shell :: struct {
 	snap:       bool,
 	footer:     string,
 	overlay:    Overlay,
+	config:     ^luaconfig.Engine,
+	menu_entries: [dynamic]model.Menu_Entry,
 	allocator:  runtime.Allocator,
 	quit:       bool,
 }
@@ -26,6 +29,7 @@ shell_init :: proc(shell: ^Shell, allocator := context.allocator) {
 	shell.allocator = allocator
 	shell.tabs = make([dynamic]tabpkg.Tab, allocator)
 	shell.rows = make([dynamic]tabpkg.Row, allocator)
+	shell.menu_entries = make([dynamic]model.Menu_Entry, allocator)
 	shell.selected = -1
 	shell.hover = -1
 	shell.footer = strings.clone("↑↓ navigate · Enter open · m menu · 1-9 tabs · q quit", allocator)
@@ -42,8 +46,65 @@ shell_destroy :: proc(shell: ^Shell) {
 	for &tab in shell.tabs do tabpkg.tab_destroy(&tab)
 	delete(shell.tabs)
 	delete(shell.footer)
+	shell_clear_menu(shell)
+	delete(shell.menu_entries)
 	overlay_destroy(&shell.overlay)
 	shell^ = {}
+}
+
+shell_set_config :: proc(shell: ^Shell, config: ^luaconfig.Engine) {
+	shell.config = config
+}
+
+shell_clear_menu :: proc(shell: ^Shell) {
+	for &entry in shell.menu_entries {
+		delete(entry.id)
+		delete(entry.label)
+	}
+	clear(&shell.menu_entries)
+}
+
+shell_open_menu :: proc(shell: ^Shell) {
+	shell_clear_menu(shell)
+	tab := shell_active_tab(shell)
+	row := shell_selected_row(shell)
+	if tab == nil || row == nil do return
+	for entry in tabpkg.tab_menu(tab, row) {
+		append(&shell.menu_entries, model.Menu_Entry{
+			id = strings.clone(entry.id, shell.allocator),
+			label = strings.clone(entry.label, shell.allocator),
+			action = entry.action,
+			danger = entry.danger,
+		})
+	}
+	if shell.config != nil {
+		extra, message := luaconfig.engine_menu_entries(shell.config, tab.name, row.path, row.is_dir, shell.allocator)
+		append(&shell.menu_entries, ..extra[:])
+		delete(extra)
+		if message != "" {
+			shell_set_footer(shell, message)
+			delete(message)
+		}
+	}
+	if len(shell.menu_entries) > 0 do overlay_menu(&shell.overlay, "Actions", shell.menu_entries[:])
+}
+
+shell_apply_lua_pending :: proc(shell: ^Shell) {
+	if shell.config == nil do return
+	if shell.config.pending_tab != "" {
+		if !shell_switch_named(shell, shell.config.pending_tab) do shell_set_footer(shell, "Lua requested an unknown tab")
+		delete(shell.config.pending_tab)
+		shell.config.pending_tab = ""
+	}
+	if shell.config.pending_reveal != "" {
+		shell_set_footer(shell, shell.config.pending_reveal)
+		delete(shell.config.pending_reveal)
+		shell.config.pending_reveal = ""
+	}
+	if shell.config.pending_refresh {
+		shell_reload(shell)
+		shell.config.pending_refresh = false
+	}
 }
 
 shell_add_tab :: proc(shell: ^Shell, tab: tabpkg.Tab) {
@@ -95,6 +156,16 @@ shell_switch_tab :: proc(shell: ^Shell, index: int) {
 	if result.message != "" do shell_set_footer(shell, result.message)
 	if result.quit do shell.quit = true
 	shell_reload(shell)
+}
+
+shell_switch_named :: proc(shell: ^Shell, name: string) -> bool {
+	for &tab, index in shell.tabs {
+		if tab.name == name {
+			shell_switch_tab(shell, index)
+			return true
+		}
+	}
+	return false
 }
 
 shell_total_height :: proc(shell: ^Shell) -> int {
@@ -158,12 +229,23 @@ shell_wheel :: proc(shell: ^Shell, delta, viewport: int) {
 
 shell_apply_result :: proc(shell: ^Shell, result: tabpkg.Tab_Result) {
 	if result.message != "" do shell_set_footer(shell, result.message)
+	if shell.config != nil && result.open_path != "" {
+		message := luaconfig.engine_emit(shell.config, "open", result.open_path)
+		if message != "" {
+			shell_set_footer(shell, message)
+			delete(message)
+		}
+	}
+	if shell.config != nil && result.root_path != "" {
+		message := luaconfig.engine_emit(shell.config, "root", result.root_path)
+		if message != "" {
+			shell_set_footer(shell, message)
+			delete(message)
+		}
+	}
 	if result.rows_changed do shell_reload(shell)
 	if result.open_menu {
-		tab := shell_active_tab(shell)
-		row := shell_selected_row(shell)
-		entries := tabpkg.tab_menu(tab, row)
-		if len(entries) > 0 do overlay_menu(&shell.overlay, "Actions", entries)
+		shell_open_menu(shell)
 	}
 	if result.quit do shell.quit = true
 }
@@ -190,11 +272,27 @@ shell_run_action :: proc(shell: ^Shell, action: model.Action, value := "") {
 shell_overlay_result :: proc(shell: ^Shell, result: Overlay_Result) {
 	if result.dismiss {
 		overlay_close(&shell.overlay)
+		shell_clear_menu(shell)
 		return
 	}
 	if !result.submit do return
 	action := result.action
 	value := result.value
+	if action == .Lua {
+		tab := shell_active_tab(shell)
+		row := shell_selected_row(shell)
+		if shell.config != nil && tab != nil && row != nil {
+			message := luaconfig.engine_run_menu(shell.config, tab.name, result.entry_id, row.path, row.is_dir)
+			if message != "" {
+				shell_set_footer(shell, message)
+				delete(message)
+			}
+		}
+		overlay_close(&shell.overlay)
+		shell_clear_menu(shell)
+		shell_apply_lua_pending(shell)
+		return
+	}
 	if shell.overlay.kind == .Menu {
 		if title, needed := action_needs_prompt(action); needed {
 			initial := ""
@@ -215,6 +313,7 @@ shell_overlay_result :: proc(shell: ^Shell, result: Overlay_Result) {
 		}
 	}
 	overlay_close(&shell.overlay)
+	shell_clear_menu(shell)
 	shell_run_action(shell, action, value)
 }
 

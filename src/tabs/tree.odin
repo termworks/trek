@@ -139,7 +139,7 @@ tree_rows_proc :: proc(data: rawptr, allocator: runtime.Allocator) -> [dynamic]R
 tree_selected_toggle :: proc(state: ^Tree_Tab, selected: ^Row) -> Tab_Result {
 	if selected == nil || !selected.is_dir do return {}
 	model.tree_toggle(&state.tree, selected.path)
-	return Tab_Result{rows_changed = true}
+	return Tab_Result{rows_changed = true, open_path = selected.path}
 }
 
 tree_select_proc :: proc(data: rawptr, selected: ^Row) -> Tab_Result {
@@ -215,6 +215,9 @@ tree_action_proc :: proc(data: rawptr, selected: ^Row, action: model.Action, val
 		os.file_info_delete(info, context.allocator)
 		model.tree_destroy(&state.tree)
 		model.tree_init(&state.tree, value)
+		model.tree_refresh(&state.tree)
+		tree_git_refresh(state)
+		return Tab_Result{rows_changed = true, message = "tree updated", root_path = state.tree.root}
 	case .Copy_Path, .Copy_Relative_Path:
 		return Tab_Result{message = selected.path}
 	case .Stage_Changes:

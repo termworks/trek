@@ -28,6 +28,7 @@ Overlay_Result :: struct {
 	submit:  bool,
 	action:  model.Action,
 	value:   string,
+	entry_id: string,
 }
 
 overlay_init :: proc(overlay: ^Overlay, allocator := context.allocator) {
@@ -98,7 +99,8 @@ overlay_key :: proc(overlay: ^Overlay, key: tui.Key) -> Overlay_Result {
 		if key.code == .Up do overlay.selected = max(overlay.selected - 1, 0)
 		if key.code == .Down do overlay.selected = min(overlay.selected + 1, len(overlay.entries) - 1)
 		if key.code == .Enter && len(overlay.entries) > 0 {
-			return Overlay_Result{submit = true, action = overlay.entries[overlay.selected].action}
+			entry := &overlay.entries[overlay.selected]
+			return Overlay_Result{submit = true, action = entry.action, entry_id = entry.id}
 		}
 	case .Prompt:
 		if key.code == .Backspace do overlay_backspace(overlay)

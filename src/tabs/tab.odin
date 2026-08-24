@@ -42,6 +42,8 @@ Tab_Result :: struct {
 	open_menu:    bool,
 	quit:         bool,
 	message:      string,
+	open_path:    string,
+	root_path:    string,
 }
 
 Rows_Proc :: proc(data: rawptr, allocator: runtime.Allocator) -> [dynamic]Row

@@ -36,6 +36,7 @@ Node :: struct {
 	actions:    []string,
 	hover:      Style,
 	press:      Style,
+	owns_values: bool,
 }
 
 nodes_copy :: proc(values: []Node, allocator := context.allocator) -> [dynamic]Node {
@@ -104,6 +105,14 @@ node_destroy :: proc(node: ^Node) {
 	}
 	delete(node.children)
 	node.children = nil
+	if node.owns_values {
+		delete(node.value)
+		delete(node.mark)
+		delete(node.region_id)
+		for action in node.actions do delete(action)
+		delete(node.actions)
+	}
+	node^ = {}
 }
 
 Rect :: struct {

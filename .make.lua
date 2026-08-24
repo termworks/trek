@@ -235,12 +235,22 @@ make.alias("r", "run")
 make.recipe{
   name = "test",
   desc = "the suite",
-  run = function()
+  params = {
+    { "--package", desc = "one package name" },
+    { "--names", desc = "comma-separated Odin test names" },
+    { "--threads", desc = "test runner thread count" },
+  },
+  run = function(a)
     sh.mkdir("-p", "target/tests")
     for _, dir in ipairs(packages("*_test.odin")) do
       local package_name = dir:match("([^/]+)$") or "root"
       if dir == SRC then package_name = NAME end
-      sh.odin("test", dir, "-out:target/tests/" .. package_name)
+      if not a.package or a.package == package_name then
+        local args = { "test", dir, "-out:target/tests/" .. package_name }
+        if a.names then args[#args + 1] = "-define:ODIN_TEST_NAMES=" .. a.names end
+        if a.threads then args[#args + 1] = "-define:ODIN_TEST_THREADS=" .. a.threads end
+        sh.odin(table.unpack(args))
+      end
     end
   end,
 }

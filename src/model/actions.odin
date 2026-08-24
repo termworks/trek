@@ -14,6 +14,7 @@ Action :: enum {
 	Discard_Changes,
 	Commit,
 	Change_Folder,
+	Lua,
 }
 
 Menu_Entry :: struct {
