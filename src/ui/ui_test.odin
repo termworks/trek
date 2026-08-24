@@ -221,3 +221,39 @@ test_active_tab_falls_back_when_it_disappears :: proc(t: ^testing.T) {
 	shell_ensure_visible_active(&shell)
 	testing.expect_value(t, shell.active, 0)
 }
+
+// The scrollbar mirrors the activity strip: rail in the strip's background, thumb in
+// its active-slot background. Hovering fills the cell instead of half-filling it, so
+// it thickens without taking a column from the content.
+@(test)
+test_scrollbar_mirrors_the_activity_strip :: proc(t: ^testing.T) {
+	shell: Shell
+	shell_init(&shell)
+	defer shell_destroy(&shell)
+	shell_add_tab(&shell, fake_tab("tree"))
+	buffer: tui.Buffer
+	tui.buffer_init(&buffer, 40, 6)
+	defer tui.buffer_destroy(&buffer)
+	layout: tui.Layout
+	tui.layout_init(&layout)
+	defer tui.layout_destroy(&layout)
+
+	// fake_tab yields more rows than this height, so the bar is drawn.
+	shell_render(&shell, &buffer, &layout)
+	idle, ok := tui.buffer_get(&buffer, buffer.width - 1, HEADER_HEIGHT)
+	testing.expect(t, ok)
+	testing.expect_value(t, idle.rune, '▐')
+	testing.expect_value(t, idle.style.fg, tui.ACTIVITY_ACTIVE_BG)
+
+	// A move over the last column marks it hovered.
+	shell_mouse(&shell, tui.Mouse_Event{x = buffer.width - 1, y = HEADER_HEIGHT, action = .Move}, buffer.width, buffer.height)
+	testing.expect(t, shell.hover_scrollbar)
+	shell_render(&shell, &buffer, &layout)
+	hovered, _ := tui.buffer_get(&buffer, buffer.width - 1, HEADER_HEIGHT)
+	testing.expect_value(t, hovered.rune, ' ')
+	testing.expect_value(t, hovered.style.bg, tui.ACTIVITY_ACTIVE_BG)
+
+	// Moving back into the content releases it.
+	shell_mouse(&shell, tui.Mouse_Event{x = ACTIVITY_WIDTH + CONTENT_GUTTER, y = HEADER_HEIGHT, action = .Move}, buffer.width, buffer.height)
+	testing.expect(t, !shell.hover_scrollbar)
+}

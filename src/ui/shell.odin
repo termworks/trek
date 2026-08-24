@@ -29,6 +29,8 @@ Shell :: struct {
 	hover_tab:  int,
 	// Content width from the last render, so a reload can build rows that wrap.
 	content_width: int,
+	// Whether the pointer is over the scrollbar column.
+	hover_scrollbar: bool,
 	snap:       bool,
 	footer:     string,
 	overlay:    Overlay,
@@ -465,6 +467,9 @@ shell_mouse :: proc(shell: ^Shell, mouse: tui.Mouse_Event, width, height: int) {
 		return
 	}
 	shell.hover_tab = -1
+	// The scrollbar sits in the last column; give it a two-column grab zone, since a
+	// one-column target is hard to hit deliberately with a mouse.
+	shell.hover_scrollbar = mouse.x >= width - 2 && shell_total_height(shell) > shell_viewport_height(height)
 	body_top := HEADER_HEIGHT
 	if mouse.y < body_top || mouse.y >= height - FOOTER_HEIGHT do return
 	index := shell_row_at_line(shell, shell.scroll + mouse.y - body_top)
@@ -710,8 +715,23 @@ shell_render :: proc(shell: ^Shell, buffer: ^tui.Buffer, layout: ^tui.Layout) {
 		thumb_height := max(viewport * viewport / total, 1)
 		maximum := max(total - viewport, 1)
 		thumb_y := body_top + shell.scroll * max(viewport - thumb_height, 0) / maximum
-		for y in body_top ..< footer_y do tui.buffer_set(buffer, track_x, y, tui.Cell{rune = '│', style = tui.Style{attrs = {.Dim}}})
-		for y in thumb_y ..< min(thumb_y + thumb_height, footer_y) do tui.buffer_set(buffer, track_x, y, tui.Cell{rune = '┃', style = tui.PLAIN_STYLE})
+		// The scrollbar mirrors the activity strip on the opposite edge: the rail takes
+		// the strip's own background and the thumb takes its active-slot background, so
+		// the two sides of the pane read as one piece of chrome.
+		//
+		// Hovering thickens it without changing the layout: a right half block paints
+		// half a cell, and filling the cell instead doubles the apparent width while the
+		// content keeps exactly the same room.
+		for y in body_top ..< footer_y {
+			cell := tui.Cell{rune = '▐', style = tui.Style{fg = tui.ACTIVITY_BG}}
+			if shell.hover_scrollbar do cell = tui.Cell{rune = ' ', style = tui.Style{bg = tui.ACTIVITY_BG}}
+			tui.buffer_set(buffer, track_x, y, cell)
+		}
+		for y in thumb_y ..< min(thumb_y + thumb_height, footer_y) {
+			cell := tui.Cell{rune = '▐', style = tui.Style{fg = tui.ACTIVITY_ACTIVE_BG}}
+			if shell.hover_scrollbar do cell = tui.Cell{rune = ' ', style = tui.Style{bg = tui.ACTIVITY_ACTIVE_BG}}
+			tui.buffer_set(buffer, track_x, y, cell)
+		}
 	}
 	footer_style := tui.Style{attrs = {.Dim, .Italic}}
 	footer := tui.truncate_text(shell.footer, max(content_width - 1, 0))
