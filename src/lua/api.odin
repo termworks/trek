@@ -29,12 +29,14 @@ table_bool :: proc(L: ^clua.State, table: c.int, field: cstring, fallback: bool)
 }
 
 engine_read_settings :: proc(engine: ^Engine, trek_index: c.int) {
-	delete(engine.settings.icons)
 	delete(engine.settings.start_tab)
-	engine.settings.icons = table_string(engine.state, trek_index, "icons", engine.allocator)
 	engine.settings.hidden = table_bool(engine.state, trek_index, "hidden", false)
-	engine.settings.git_decorations = table_bool(engine.state, trek_index, "git_decorations", true)
 	engine.settings.start_tab = table_string(engine.state, trek_index, "start_tab", engine.allocator)
+	engine.settings.width = table_int(engine.state, trek_index, "width", 0)
+	engine.settings.height = table_int(engine.state, trek_index, "height", 0)
+	delete(engine.settings.align)
+	engine.settings.align = table_string(engine.state, trek_index, "align", engine.allocator)
+	engine.settings.border = table_bool(engine.state, trek_index, "border", true)
 }
 
 engine_read_tabs :: proc(engine: ^Engine, trek_index: c.int) {
@@ -90,15 +92,11 @@ engine_read_api :: proc(engine: ^Engine) -> bool {
 	return true
 }
 
-engine_apply_defaults :: proc(engine: ^Engine, icons: string, hidden, git_decorations: bool, start_tab: string) -> bool {
+engine_apply_defaults :: proc(engine: ^Engine, hidden: bool, start_tab: string) -> bool {
 	L := engine.state
 	if !get_trek(L) do return false
-	push_string(L, icons)
-	clua.setfield(L, -2, "icons")
 	clua.pushboolean(L, b32(hidden))
 	clua.setfield(L, -2, "hidden")
-	clua.pushboolean(L, b32(git_decorations))
-	clua.setfield(L, -2, "git_decorations")
 	push_string(L, start_tab)
 	clua.setfield(L, -2, "start_tab")
 	clua.pop(L, 1)
@@ -375,4 +373,21 @@ engine_run_menu :: proc(engine: ^Engine, tab_name, id, row_path: string, is_dir:
 	push_context(engine, tab_name, row_path, is_dir)
 	if clua.pcall(L, 1, 0, 0) != 0 do return call_error(engine, "Lua menu run")
 	return ""
+}
+
+// Whether a Lua tab wants to be in the activity bar. A tab with no `when` is always
+// shown; `when` is called on root changes, never per frame, so it may do real work.
+// A raise is reported and treated as "show it", because hiding a tab because its
+// predicate is broken removes the only place the error could be read.
+engine_tab_visible :: proc(engine: ^Engine, name: string) -> (bool, string) {
+	L := engine.state
+	base := clua.gettop(L)
+	defer clua.settop(L, base)
+	if !push_tab_spec(engine, name) do return true, ""
+	clua.getfield(L, -1, "when")
+	if clua.isnil(L, -1) do return true, ""
+	if !clua.isfunction(L, -1) do return true, strings.clone("Lua tab `when` must be a function", engine.allocator)
+	push_context(engine, name, "", false)
+	if clua.pcall(L, 1, 1, 0) != 0 do return true, call_error(engine, "Lua when")
+	return bool(clua.toboolean(L, -1)), ""
 }

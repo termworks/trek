@@ -9,71 +9,52 @@ import gitcore "../git"
 import model "../model"
 import tui "../tui"
 
-Changes_Repo :: struct {
-	repo:    gitcore.Git_Repo,
-	status:  gitcore.Status,
-	message: [dynamic]byte,
+// One repository, three lists and a commit box. Enter moves a file between
+// unstaged and staged; that plus committing is the whole tab.
+Changes_Section :: enum {
+	New,
+	Modified,
+	Staged,
 }
 
 Changes_Tab :: struct {
 	root:      string,
-	repos:     [dynamic]Changes_Repo,
-	theme:     model.Icon_Theme,
+	repo:      gitcore.Git_Repo,
+	status:    gitcore.Status,
+	message:   [dynamic]byte,
+	has_repo:  bool,
 	allocator: runtime.Allocator,
 }
 
-changes_repo_destroy :: proc(view: ^Changes_Repo) {
-	gitcore.repo_destroy(&view.repo)
-	gitcore.status_destroy(&view.status)
-	delete(view.message)
-	view^ = {}
-}
-
 changes_clear :: proc(state: ^Changes_Tab) {
-	for &view in state.repos do changes_repo_destroy(&view)
-	delete(state.repos)
-	state.repos = nil
-}
-
-changes_take_message :: proc(old: ^[dynamic]Changes_Repo, root: string, allocator: runtime.Allocator) -> [dynamic]byte {
-	for &view in old {
-		if view.repo.root == root {
-			message := view.message
-			view.message = nil
-			return message
-		}
+	if state.has_repo {
+		gitcore.repo_destroy(&state.repo)
+		gitcore.status_destroy(&state.status)
 	}
-	return make([dynamic]byte, allocator)
+	state.has_repo = false
 }
 
 changes_refresh :: proc(state: ^Changes_Tab) {
-	old := state.repos
-	state.repos = make([dynamic]Changes_Repo, state.allocator)
-	repos := gitcore.discover_all(state.root, allocator = state.allocator)
-	for &repo in repos {
-		status, message, ok := gitcore.repo_status(&repo, state.allocator)
-		delete(message)
-		if !ok {
-			gitcore.repo_destroy(&repo)
-			continue
-		}
-		append(&state.repos, Changes_Repo{
-			repo = repo,
-			status = status,
-			message = changes_take_message(&old, repo.root, state.allocator),
-		})
-		repo = {}
+	changes_clear(state)
+	repo, discover_output, found := gitcore.discover(state.root, state.allocator)
+	delete(discover_output)
+	if !found do return
+	state.repo = repo
+	status, status_output, ok := gitcore.repo_status(&repo, state.allocator)
+	delete(status_output)
+	if !ok {
+		gitcore.repo_destroy(&state.repo)
+		return
 	}
-	delete(repos)
-	for &view in old do changes_repo_destroy(&view)
-	delete(old)
+	state.status = status
+	state.has_repo = true
 }
 
-changes_new :: proc(root: string, theme := model.Icon_Theme.Emoji, allocator := context.allocator) -> ^Changes_Tab {
+changes_new :: proc(root: string, allocator := context.allocator) -> ^Changes_Tab {
 	state := new(Changes_Tab, allocator)
-	state.root = strings.clone(root, allocator)
-	state.theme = theme
 	state.allocator = allocator
+	state.root = strings.clone(root, allocator)
+	state.message = make([dynamic]byte, allocator)
 	changes_refresh(state)
 	return state
 }
@@ -83,372 +64,331 @@ changes_row_id :: proc(format: string, args: ..any, allocator := context.allocat
 }
 
 changes_owned_text :: proc(value: string, style := tui.PLAIN_STYLE) -> tui.Node {
-	node := tui.text(value, style)
-	node.owns_values = true
-	return node
+	return tui.owned_text(value, style)
 }
 
-changes_repo_node :: proc(state: ^Changes_Tab, view: ^Changes_Repo, allocator: runtime.Allocator) -> tui.Node {
-	icon := model.file_icon(state.theme, "", true, false)
-	dirty := len(view.status.staged) > 0 || len(view.status.unstaged) > 0
-	counts := ""
-	if view.status.ahead + view.status.behind > 0 {
-		counts = fmt.aprintf(" %d↑ %d↓", view.status.ahead, view.status.behind, allocator = context.temp_allocator)
-	}
-	branch := fmt.aprintf(
-		"%s %s%s%s ⇅  ✓ ",
-		state.theme == .Material ? "\ue725" : "⎇",
-		view.status.branch,
-		dirty ? "*" : "",
-		counts,
-		allocator = allocator,
-	)
+// Untracked files are the New list; everything else unstaged is Modified.
+changes_is_new :: proc(entry: gitcore.File_Entry) -> bool {
+	return entry.letter == 'U'
+}
+
+changes_section_node :: proc(title: string, count: int, allocator: runtime.Allocator) -> tui.Node {
+	badge := fmt.aprintf(" %d", count, allocator = allocator)
 	return tui.row([]tui.Node{
-		tui.text(" ▾ ", tui.Style{attrs = {.Bold}}),
-		tui.text(icon.glyph, tree_icon_style(icon)),
 		tui.text(" "),
-		tui.text(filepath.base(view.repo.root), tui.Style{attrs = {.Bold}}),
+		tui.text(title, tui.Style{fg = tui.RAMP_TEXT, attrs = {.Bold}}),
+		changes_owned_text(badge, tui.Style{fg = tui.RAMP_FAINT}),
 		tui.spacer(),
-		changes_owned_text(branch, tui.Style{attrs = {.Dim}}),
 	}, allocator)
 }
 
-changes_message_node :: proc(state: ^Changes_Tab, view: ^Changes_Repo, allocator: runtime.Allocator) -> tui.Node {
-	border := tui.Style{attrs = {.Dim}}
-	message := string(view.message[:])
+// Columns consumed before the name: three of indent, the status glyph, the icon,
+// and a space after each. Continuation lines indent to here so a wrapped path sits
+// under the name rather than under the glyph.
+CHANGES_ENTRY_PREFIX :: 7
+
+// The directory a file lives in, or "" for one at the repository root.
+changes_entry_dir :: proc(entry: ^gitcore.File_Entry, allocator: runtime.Allocator) -> string {
+	dir := filepath.dir(entry.path, allocator)
+	if dir == "." do return ""
+	return dir
+}
+
+// The path wraps rather than truncating, the same way the graph reflows a commit:
+// a deep path is worth reading in full, and an ellipsis hides exactly the part that
+// distinguishes two files with the same name.
+changes_entry_lines :: proc(entry: ^gitcore.File_Entry, width: int) -> [dynamic]string {
+	name := filepath.base(entry.path)
+	dir := changes_entry_dir(entry, context.temp_allocator)
+	room := max(width - CHANGES_ENTRY_PREFIX - 2, 8)
+	if dir == "" || tui.text_width(name) + 1 + tui.text_width(dir) <= room {
+		lines := make([dynamic]string, context.temp_allocator)
+		if dir == "" {
+			append(&lines, name)
+		} else {
+			append(&lines, fmt.aprintf("%s %s", name, dir, allocator = context.temp_allocator))
+		}
+		return lines
+	}
+	// Too long together: the name keeps the first line and the path flows beneath it.
+	lines := make([dynamic]string, context.temp_allocator)
+	append(&lines, name)
+	wrapped := tui.wrap_path(dir, room, context.temp_allocator)
+	append(&lines, ..wrapped[:])
+	return lines
+}
+
+changes_entry_height :: proc(entry: ^gitcore.File_Entry, width: int) -> int {
+	return len(changes_entry_lines(entry, width))
+}
+
+changes_entry_node :: proc(state: ^Changes_Tab, entry: ^gitcore.File_Entry, width: int, allocator: runtime.Allocator) -> tui.Node {
+	name := filepath.base(entry.path)
+	icon := model.file_icon(name, false, false)
+	lines := changes_entry_lines(entry, width)
+	rows := make([dynamic]tui.Node, allocator)
+	defer delete(rows)
+	for line, index in lines {
+		children := make([dynamic]tui.Node, allocator)
+		defer delete(children)
+		if index == 0 {
+			append(&children, tui.text("   "))
+			append(&children, tui.text(changes_git_glyph(entry.letter), tui.merge_style(changes_status_style(entry.letter), tui.Style{attrs = {.Bold}})))
+			append(&children, tui.text(" "))
+			append(&children, tui.text(icon.glyph, tree_icon_style(icon)))
+			append(&children, tui.text(" "))
+			// The name is plain and the directory beside it is dim, so a single line
+			// carrying both is split at the space rather than styled as one run.
+			if gap := strings.index_byte(line, ' '); gap >= 0 {
+				append(&children, tui.owned_text(strings.clone(line[:gap], allocator)))
+				append(&children, tui.text(" "))
+				append(&children, tui.owned_text(strings.clone(line[gap + 1:], allocator), tui.Style{fg = tui.RAMP_FAINT, attrs = {.Dim}}))
+			} else {
+				append(&children, tui.owned_text(strings.clone(line, allocator)))
+			}
+		} else {
+			append(&children, tui.priority(tui.transparent(CHANGES_ENTRY_PREFIX), 100, allocator))
+			append(&children, tui.owned_text(strings.clone(line, allocator), tui.Style{fg = tui.RAMP_FAINT, attrs = {.Dim}}))
+		}
+		append(&children, tui.spacer())
+		append(&children, tui.priority(tui.transparent(2), 100, allocator))
+		append(&rows, tui.row(children[:], allocator))
+	}
+	return tui.column(rows[:], allocator)
+}
+
+changes_message_node :: proc(state: ^Changes_Tab, allocator: runtime.Allocator) -> tui.Node {
+	border := tui.Style{fg = tui.RAMP_BORDER, attrs = {.Dim}}
+	message := string(state.message[:])
 	content := tui.text(message)
 	if message == "" {
-		placeholder := fmt.aprintf("Message (⏎ to commit on \"%s\")", view.status.branch, allocator = allocator)
-		content = changes_owned_text(placeholder, tui.Style{attrs = {.Dim, .Italic}})
+		content = tui.text("Commit message", tui.Style{fg = tui.RAMP_FAINT, attrs = {.Dim, .Italic}})
 	}
 	return tui.column([]tui.Node{
-		tui.row([]tui.Node{
-			tui.text("┌", border),
-			tui.fill('─', border),
-			tui.text("┐", border),
-		}, allocator),
+		tui.row([]tui.Node{tui.text("┌", border), tui.fill('─', border), tui.text("┐", border)}, allocator),
 		tui.row([]tui.Node{
 			tui.text("│", border),
 			tui.priority(tui.truncate(content, 0), 0, allocator),
 			tui.spacer(),
 			tui.text("│", border),
 		}, allocator),
-		tui.row([]tui.Node{
-			tui.text("└", border),
-			tui.fill('─', border),
-			tui.text("┘", border),
-		}, allocator),
+		tui.row([]tui.Node{tui.text("└", border), tui.fill('─', border), tui.text("┘", border)}, allocator),
 	}, allocator)
 }
 
-changes_commit_node :: proc(allocator: runtime.Allocator) -> tui.Node {
-	button := tui.styled(tui.row([]tui.Node{
-		tui.spacer(),
-		tui.text("✓ Commit"),
-		tui.spacer(),
-		tui.text("│∨"),
-	}, allocator), tui.Style{fg = tui.rgb(0xff, 0xff, 0xff), bg = tui.BUTTON_BG}, allocator)
-	return tui.column([]tui.Node{tui.text(""), button, tui.text("")}, allocator)
-}
-
-changes_section_node :: proc(title: string, count: int, allocator: runtime.Allocator) -> tui.Node {
-	badge := fmt.aprintf(" %d ", count, allocator = allocator)
+changes_commit_node :: proc(state: ^Changes_Tab, allocator: runtime.Allocator) -> tui.Node {
+	label := fmt.aprintf(" Commit %d staged ", len(state.status.staged), allocator = allocator)
+	style := tui.Style{fg = tui.BUTTON_FG, bg = tui.BUTTON_BG, attrs = {.Bold}}
+	if len(state.status.staged) == 0 do style = tui.Style{fg = tui.RAMP_FAINT, attrs = {.Dim}}
 	return tui.row([]tui.Node{
-		tui.text(" ▾ ", tui.Style{attrs = {.Bold}}),
-		tui.text(title, tui.Style{attrs = {.Bold}}),
 		tui.spacer(),
-		tui.styled(changes_owned_text(badge), tui.Style{fg = tui.rgb(0xff, 0xff, 0xff), bg = tui.BUTTON_BG}, allocator),
-		tui.text(" "),
+		tui.styled(changes_owned_text(label), style, allocator),
+		tui.spacer(),
 	}, allocator)
 }
 
-changes_entry_node :: proc(state: ^Changes_Tab, entry: ^gitcore.File_Entry, allocator: runtime.Allocator) -> tui.Node {
-	name := filepath.base(entry.path)
-	dir := filepath.dir(entry.path, allocator)
-	if dir == "." {
-		delete(dir)
-		dir = ""
-	}
-	icon := model.file_icon(state.theme, name, false, false)
-	children := make([dynamic]tui.Node, allocator)
-	defer delete(children)
-	append(&children, tui.text("   "))
-	append(&children, tui.text(icon.glyph, tree_icon_style(icon)))
-	append(&children, tui.text(" "))
-	append(&children, tui.text(name, status_style(entry.letter)))
-	if dir != "" {
-		append(&children, tui.text(" "))
-		append(&children, tui.priority(tui.truncate(changes_owned_text(dir, tui.Style{attrs = {.Dim}}), 0), 0, allocator))
-	}
-	append(&children, tui.spacer())
-	append(&children, tui.text(status_text(entry.letter), tui.merge_style(status_style(entry.letter), tui.Style{attrs = {.Bold}})))
-	append(&children, tui.text(" "))
-	return tui.row(children[:], allocator)
-}
-
-changes_append_entry :: proc(
+changes_append_section :: proc(
 	state: ^Changes_Tab,
 	rows: ^[dynamic]Row,
-	entry: ^gitcore.File_Entry,
-	repo_index, entry_index: int,
-	staged: bool,
+	section: Changes_Section,
+	title: string,
+	entries: []gitcore.File_Entry,
+	width: int,
 	allocator: runtime.Allocator,
 ) {
-	id := changes_row_id("entry:%d:%s:%s", repo_index, staged ? "staged" : "changed", entry.path, allocator = allocator)
+	if len(entries) == 0 do return
+	header := changes_row_id("section:%v", section, allocator = allocator)
 	append(rows, Row{
-		id = id,
-		path = id,
-		selectable = true,
+		id = header,
+		path = strings.clone(header, allocator),
+		selectable = false,
 		height = 1,
-		kind = .Git_Entry,
-		repo_index = repo_index,
-		entry_index = entry_index,
-		staged = staged,
-		node = changes_entry_node(state, entry, allocator),
+		kind = .Section_Header,
+		node = changes_section_node(title, len(entries), allocator),
 	})
+	for &entry in entries {
+		id := changes_row_id("entry:%v:%s", section, entry.path, allocator = allocator)
+		append(rows, Row{
+			id = id,
+			path = strings.clone(entry.path, allocator),
+			selectable = true,
+			height = changes_entry_height(&entry, width),
+			kind = .Git_Entry,
+			staged = section == .Staged,
+			node = changes_entry_node(state, &entry, width, allocator),
+		})
+	}
 }
 
-changes_rows_proc :: proc(data: rawptr, allocator: runtime.Allocator) -> [dynamic]Row {
+changes_rows_proc :: proc(data: rawptr, width: int, allocator: runtime.Allocator) -> [dynamic]Row {
 	state := (^Changes_Tab)(data)
 	rows := make([dynamic]Row, allocator)
-	if len(state.repos) == 0 {
-		id := strings.clone(" No Git repositories found", allocator)
-		append(&rows, Row{id = id, path = id, selectable = false, height = 1, node = tui.text(id)})
+	if !state.has_repo {
+		id := strings.clone(" Not a git repository", allocator)
+		append(&rows, Row{id = id, path = strings.clone(id, allocator), selectable = false, height = 1, node = tui.text(id, tui.Style{fg = tui.RAMP_FAINT, attrs = {.Dim}})})
 		return rows
 	}
-	for &view, repo_index in state.repos {
-		header := changes_row_id("repo:%d:%s", repo_index, view.repo.root, allocator = allocator)
-		append(&rows, Row{
-			id = header,
-			path = header,
-			selectable = false,
-			height = 1,
-			kind = .Repo_Header,
-			repo_index = repo_index,
-			node = changes_repo_node(state, &view, allocator),
-		})
-		commit_id := changes_row_id("commit:%d:%s", repo_index, view.repo.root, allocator = allocator)
-		commit_value := string(view.message[:])
-		append(&rows, Row{
-			id = commit_id,
-			path = commit_id,
-			selectable = true,
-			height = 3,
-			kind = .Commit_Box,
-			repo_index = repo_index,
-			input_value = commit_value,
-			node = changes_message_node(state, &view, allocator),
-		})
-		button_id := changes_row_id("commit-button:%d:%s", repo_index, view.repo.root, allocator = allocator)
-		append(&rows, Row{
-			id = button_id,
-			path = button_id,
-			selectable = true,
-			height = 3,
-			kind = .Commit_Button,
-			repo_index = repo_index,
-			node = changes_commit_node(allocator),
-		})
-		if len(view.status.staged) > 0 {
-			staged_header := changes_row_id("staged:%d", repo_index, allocator = allocator)
-			append(&rows, Row{
-				id = staged_header,
-				path = staged_header,
-				selectable = false,
-				height = 1,
-				kind = .Section_Header,
-				repo_index = repo_index,
-				node = changes_section_node("Staged Changes", len(view.status.staged), allocator),
-			})
-			for &entry, entry_index in view.status.staged {
-				changes_append_entry(state, &rows, &entry, repo_index, entry_index, true, allocator)
-			}
-		}
-		changes_header := changes_row_id("changes:%d", repo_index, allocator = allocator)
-		append(&rows, Row{
-			id = changes_header,
-			path = changes_header,
-			selectable = false,
-			height = 1,
-			kind = .Section_Header,
-			repo_index = repo_index,
-			node = changes_section_node("Changes", len(view.status.unstaged), allocator),
-		})
-		for &entry, entry_index in view.status.unstaged {
-			changes_append_entry(state, &rows, &entry, repo_index, entry_index, false, allocator)
-		}
-		drawers := [?]string{"Graph", "Commits", "File History", "Branches", "Worktrees", "Remotes", "Stashes", "Tags"}
-		for drawer in drawers {
-			id := changes_row_id("drawer:%d:%s", repo_index, drawer, allocator = allocator)
-			append(&rows, Row{
-				id = id,
-				path = id,
-				selectable = true,
-				height = 1,
-				kind = .Drawer_Header,
-				repo_index = repo_index,
-				node = tui.row([]tui.Node{
-					tui.text(" ▸ ", tui.Style{attrs = {.Bold}}),
-					tui.text(drawer, tui.Style{attrs = {.Bold}}),
-				}, allocator),
-			})
+	fresh := make([dynamic]gitcore.File_Entry, allocator)
+	changed := make([dynamic]gitcore.File_Entry, allocator)
+	defer delete(fresh)
+	defer delete(changed)
+	for entry in state.status.unstaged {
+		if changes_is_new(entry) {
+			append(&fresh, entry)
+		} else {
+			append(&changed, entry)
 		}
 	}
+	changes_append_section(state, &rows, .New, "NEW", fresh[:], width, allocator)
+	changes_append_section(state, &rows, .Modified, "MODIFIED", changed[:], width, allocator)
+	changes_append_section(state, &rows, .Staged, "STAGED", state.status.staged[:], width, allocator)
+	if len(rows) == 0 {
+		id := strings.clone(" Working tree clean", allocator)
+		append(&rows, Row{id = id, path = strings.clone(id, allocator), selectable = false, height = 1, node = tui.text(id, tui.Style{fg = tui.RAMP_FAINT, attrs = {.Dim}})})
+	}
+	spacer_id := changes_row_id("spacer", allocator = allocator)
+	append(&rows, Row{id = spacer_id, path = strings.clone(spacer_id, allocator), selectable = false, height = 1, node = tui.text("")})
+	box_id := changes_row_id("message", allocator = allocator)
+	append(&rows, Row{
+		id = box_id,
+		path = strings.clone(box_id, allocator),
+		selectable = true,
+		height = 3,
+		kind = .Commit_Box,
+		input_value = string(state.message[:]),
+		node = changes_message_node(state, allocator),
+	})
+	button_id := changes_row_id("commit", allocator = allocator)
+	append(&rows, Row{
+		id = button_id,
+		path = strings.clone(button_id, allocator),
+		selectable = true,
+		height = 1,
+		kind = .Commit_Button,
+		node = changes_commit_node(state, allocator),
+	})
 	return rows
 }
 
-changes_view :: proc(state: ^Changes_Tab, row: ^Row) -> ^Changes_Repo {
-	if row == nil || row.repo_index < 0 || row.repo_index >= len(state.repos) do return nil
-	return &state.repos[row.repo_index]
-}
-
-changes_entry :: proc(view: ^Changes_Repo, row: ^Row) -> ^gitcore.File_Entry {
-	if view == nil || row == nil || row.kind != .Git_Entry do return nil
-	if row.staged {
-		if row.entry_index >= 0 && row.entry_index < len(view.status.staged) do return &view.status.staged[row.entry_index]
-	} else {
-		if row.entry_index >= 0 && row.entry_index < len(view.status.unstaged) do return &view.status.unstaged[row.entry_index]
+// The selected row's entry, looked up by path in whichever list it belongs to.
+changes_entry :: proc(state: ^Changes_Tab, row: ^Row) -> ^gitcore.File_Entry {
+	if row == nil || row.kind != .Git_Entry do return nil
+	list := row.staged ? &state.status.staged : &state.status.unstaged
+	for &entry in list {
+		if entry.path == row.path do return &entry
 	}
 	return nil
 }
 
+// Tab_Result.message is borrowed by the shell, which clones it: returning an
+// allocated git string here leaks it on every failure. Free it and report a fixed
+// phrase, keeping raw git text out of the UI at the same time.
 changes_operation_result :: proc(state: ^Changes_Tab, message: string, ok: bool, success: string) -> Tab_Result {
+	timed_out := message == "git timed out"
 	delete(message)
-	if !ok do return Tab_Result{message = "Git operation failed"}
+	if !ok do return Tab_Result{message = timed_out ? "git timed out" : "git command failed"}
 	changes_refresh(state)
 	return Tab_Result{rows_changed = true, message = success}
 }
 
-changes_commit :: proc(state: ^Changes_Tab, view: ^Changes_Repo) -> Tab_Result {
-	if view == nil do return {}
-	message, ok := gitcore.repo_commit(&view.repo, string(view.message[:]), state.allocator)
-	if ok do clear(&view.message)
-	return changes_operation_result(state, message, ok, "committed")
+// Enter on a file moves it across: unstaged becomes staged, staged goes back.
+changes_toggle :: proc(state: ^Changes_Tab, row: ^Row) -> Tab_Result {
+	entry := changes_entry(state, row)
+	if entry == nil do return Tab_Result{}
+	if row.staged {
+		output, ok := gitcore.repo_unstage_entry(&state.repo, entry, state.allocator)
+		return changes_operation_result(state, output, ok, "unstaged")
+	}
+	output, ok := gitcore.repo_stage_entry(&state.repo, entry, state.allocator)
+	return changes_operation_result(state, output, ok, "staged")
+}
+
+changes_commit :: proc(state: ^Changes_Tab) -> Tab_Result {
+	if !state.has_repo do return Tab_Result{}
+	if len(state.status.staged) == 0 do return Tab_Result{message = "nothing staged"}
+	message := strings.trim_space(string(state.message[:]))
+	if message == "" do return Tab_Result{message = "commit message is empty"}
+	output, ok := gitcore.repo_commit(&state.repo, message, state.allocator)
+	if !ok {
+		timed_out := output == "git timed out"
+		delete(output)
+		return Tab_Result{message = timed_out ? "git timed out" : "commit failed"}
+	}
+	delete(output)
+	clear(&state.message)
+	changes_refresh(state)
+	return Tab_Result{rows_changed = true, message = "committed"}
 }
 
 changes_select_proc :: proc(data: rawptr, selected: ^Row) -> Tab_Result {
 	state := (^Changes_Tab)(data)
-	view := changes_view(state, selected)
-	if selected == nil do return {}
-	if selected.kind == .Commit_Box || selected.kind == .Commit_Button do return changes_commit(state, view)
-	if selected.kind == .Drawer_Header {
-		if strings.has_suffix(selected.path, ":Graph") || strings.has_suffix(selected.path, ":Commits") {
-			return Tab_Result{switch_tab = "graph"}
-		}
-		at := strings.last_index_byte(selected.path, ':')
-		if at >= 0 do return Tab_Result{message = selected.path[at + 1:]}
-		return {}
+	if selected == nil do return Tab_Result{}
+	#partial switch selected.kind {
+	case .Git_Entry: return changes_toggle(state, selected)
+	case .Commit_Button, .Commit_Box: return changes_commit(state)
 	}
-	entry := changes_entry(view, selected)
-	if entry == nil do return {}
-	if selected.staged {
-		message, ok := gitcore.repo_unstage_entry(&view.repo, entry, state.allocator)
-		return changes_operation_result(state, message, ok, "changes unstaged")
-	}
-	message, ok := gitcore.repo_stage_entry(&view.repo, entry, state.allocator)
-	return changes_operation_result(state, message, ok, "changes staged")
+	return Tab_Result{}
 }
 
 changes_backspace :: proc(message: ^[dynamic]byte) {
-	if len(message^) == 0 do return
-	_, width := utf8.decode_last_rune(string(message^[:]))
-	n := min(width, len(message^))
-	for _ in 0 ..< n do ordered_remove(message, len(message^) - 1)
+	if len(message) == 0 do return
+	text := string(message[:])
+	_, width := utf8.decode_last_rune(transmute([]byte)text)
+	resize(message, len(message) - width)
 }
 
 changes_append_rune :: proc(message: ^[dynamic]byte, value: rune) {
-	encoded, count := utf8.encode_rune(value)
-	append(message, ..encoded[:count])
+	bytes, width := utf8.encode_rune(value)
+	append(message, ..bytes[:width])
 }
 
 changes_key_proc :: proc(data: rawptr, key: tui.Key, selected: ^Row) -> Tab_Result {
 	state := (^Changes_Tab)(data)
-	view := changes_view(state, selected)
-	if selected != nil && selected.kind == .Commit_Box && view != nil {
-		if key.code == .Backspace {
-			changes_backspace(&view.message)
+	if selected != nil && selected.kind == .Commit_Box {
+		#partial switch key.code {
+		case .Backspace:
+			changes_backspace(&state.message)
+			return Tab_Result{rows_changed = true}
+		case .Rune:
+			changes_append_rune(&state.message, key.rune)
 			return Tab_Result{rows_changed = true}
 		}
-		if key.code == .Rune && key.modifiers == {} {
-			changes_append_rune(&view.message, key.rune)
-			return Tab_Result{rows_changed = true}
-		}
-		return {}
+		return Tab_Result{}
 	}
-	if key.code != .Rune do return {}
-	switch key.rune {
-	case 'q': return Tab_Result{quit = true}
-	case 'r':
+	if key.code == .Rune && key.rune == 'r' {
 		changes_refresh(state)
-		return Tab_Result{rows_changed = true, message = "changes refreshed"}
-	case 'm':
-		return Tab_Result{open_menu = selected != nil && selected.kind == .Git_Entry}
-	case 'a':
-		if view == nil do return {}
-		message, ok := gitcore.repo_stage_all(&view.repo, state.allocator)
-		return changes_operation_result(state, message, ok, "all changes staged")
-	case 'u':
-		if view == nil do return {}
-		message, ok := gitcore.repo_unstage_all(&view.repo, state.allocator)
-		return changes_operation_result(state, message, ok, "all changes unstaged")
+		return Tab_Result{rows_changed = true, message = "refreshed"}
 	}
-	return {}
+	return Tab_Result{}
 }
 
 changes_menu_proc :: proc(data: rawptr, selected: ^Row) -> []model.Menu_Entry {
-	if selected == nil || selected.kind != .Git_Entry do return nil
-	if selected.staged do return model.CHANGES_STAGED_MENU[:]
-	return model.CHANGES_UNSTAGED_MENU[:]
+	return nil
 }
 
 changes_action_proc :: proc(data: rawptr, selected: ^Row, action: model.Action, value: string) -> Tab_Result {
-	state := (^Changes_Tab)(data)
-	view := changes_view(state, selected)
-	if view == nil do return {}
-	entry := changes_entry(view, selected)
-	#partial switch action {
-	case .Stage_Changes:
-		if entry == nil do return {}
-		message, ok := gitcore.repo_stage_entry(&view.repo, entry, state.allocator)
-		return changes_operation_result(state, message, ok, "changes staged")
-	case .Unstage_Changes:
-		if entry == nil do return {}
-		message, ok := gitcore.repo_unstage_entry(&view.repo, entry, state.allocator)
-		return changes_operation_result(state, message, ok, "changes unstaged")
-	case .Discard_Changes:
-		if entry == nil do return {}
-		message, ok := gitcore.repo_discard(&view.repo, entry, state.allocator)
-		return changes_operation_result(state, message, ok, "changes discarded")
-	case .Commit:
-		if value != "" {
-			clear(&view.message)
-			append(&view.message, ..transmute([]byte)(value))
-		}
-		return changes_commit(state, view)
-	}
-	return {}
+	return Tab_Result{}
 }
 
 changes_focus_proc :: proc(data: rawptr) -> Tab_Result {
-	changes_refresh((^Changes_Tab)(data))
+	state := (^Changes_Tab)(data)
+	changes_refresh(state)
 	return Tab_Result{rows_changed = true}
 }
 
 changes_paste_proc :: proc(data: rawptr, value: string, selected: ^Row) -> Tab_Result {
 	state := (^Changes_Tab)(data)
-	if selected == nil || selected.kind != .Commit_Box do return {}
-	view := changes_view(state, selected)
-	if view == nil do return {}
-	append(&view.message, ..transmute([]byte)(value))
+	if selected == nil || selected.kind != .Commit_Box do return Tab_Result{}
+	append(&state.message, ..transmute([]byte)value)
 	return Tab_Result{rows_changed = true}
 }
 
 changes_destroy_proc :: proc(data: rawptr) {
 	state := (^Changes_Tab)(data)
-	allocator := state.allocator
 	changes_clear(state)
+	delete(state.message)
 	delete(state.root)
-	free(state, allocator)
+	free(state, state.allocator)
 }
 
 changes_root_proc :: proc(data: rawptr, root: string) -> Tab_Result {
@@ -461,32 +401,63 @@ changes_root_proc :: proc(data: rawptr, root: string) -> Tab_Result {
 
 changes_heading_proc :: proc(data: rawptr) -> Tab_Heading {
 	state := (^Changes_Tab)(data)
-	heading := Tab_Heading{title = "Source Control", detail = filepath.base(state.root)}
-	if len(state.repos) > 0 do heading.meta = state.repos[0].status.branch
-	return heading
+	if !state.has_repo do return Tab_Heading{title = "Changes"}
+	return Tab_Heading{title = "Changes", detail = state.status.branch}
 }
 
-changes_theme_proc :: proc(data: rawptr, theme: model.Icon_Theme) {
-	(^Changes_Tab)(data).theme = theme
-}
-
-changes_tab :: proc(root: string, theme := model.Icon_Theme.Emoji, allocator := context.allocator) -> Tab {
-	state := changes_new(root, theme, allocator)
+changes_tab :: proc(root: string, allocator := context.allocator) -> Tab {
+	state := changes_new(root, allocator)
 	return Tab{
 		name = "changes",
 		title = "Changes",
-		icon = "±",
-		data = state,
+		icon = "",
+		data = rawptr(state),
 		rows = changes_rows_proc,
-		on_key = changes_key_proc,
 		on_select = changes_select_proc,
+		on_key = changes_key_proc,
 		menu = changes_menu_proc,
 		action = changes_action_proc,
-		destroy = changes_destroy_proc,
 		on_focus = changes_focus_proc,
 		on_paste = changes_paste_proc,
+		destroy = changes_destroy_proc,
 		on_root = changes_root_proc,
 		heading = changes_heading_proc,
-		set_theme = changes_theme_proc,
+		visible = changes_visible_proc,
 	}
+}
+// Symbolic git markers rather than status letters, the vocabulary lis used.
+changes_git_glyph :: proc(letter: rune) -> string {
+	switch letter {
+	case 'U': return "✭"
+	case 'M': return "✹"
+	case 'A': return "✚"
+	case 'R', 'C': return "➜"
+	case 'I': return "☒"
+	case '!': return "═"
+	case 'D': return "✖"
+	}
+	return " "
+}
+
+changes_status_style :: proc(letter: rune) -> tui.Style {
+	style := tui.Style{fg = tui.status_color(letter), bg = tui.DEFAULT_COLOR}
+	if letter == 'I' do style.attrs = {.Dim}
+	return style
+}
+
+changes_status_text :: proc(letter: rune) -> string {
+	switch letter {
+	case 'M': return "M"
+	case 'U': return "U"
+	case 'A': return "A"
+	case 'R': return "R"
+	case 'C': return "C"
+	case 'D': return "D"
+	case '!': return "!"
+	}
+	return ""
+}
+
+changes_visible_proc :: proc(data: rawptr) -> bool {
+	return (^Changes_Tab)(data).has_repo
 }

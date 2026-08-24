@@ -21,7 +21,6 @@ test_lua_reads_settings_tabs_and_nodes :: proc(t: ^testing.T) {
 	defer engine_destroy(&engine)
 	source := `
 local trek = require("trek")
-trek.icons = "material"
 trek.hidden = true
 trek.start_tab = "todo"
 trek.tab("todo", {
@@ -37,7 +36,6 @@ trek.tab("todo", {
 `
 	testing.expect(t, run_source(&engine, source, "@fixture.lua"), engine.error)
 	testing.expect(t, engine_read_api(&engine), engine.error)
-	testing.expect_value(t, engine.settings.icons, "material")
 	testing.expect(t, engine.settings.hidden)
 	testing.expect_value(t, engine.settings.start_tab, "todo")
 	testing.expect_value(t, len(engine.tabs), 1)

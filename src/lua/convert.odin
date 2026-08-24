@@ -15,15 +15,15 @@ table_int :: proc(L: ^clua.State, table: c.int, field: cstring, fallback := 0) -
 
 named_color :: proc(value: string) -> tui.Color {
 	switch value {
-	case "added": return tui.rgb(0x73, 0xc9, 0x91)
-	case "modified": return tui.rgb(0xe2, 0xc0, 0x8d)
-	case "deleted": return tui.rgb(0xc7, 0x4e, 0x39)
-	case "muted": return tui.rgb(0x6b, 0x6b, 0x6b)
-	case "accent": return tui.rgb(0x6c, 0xae, 0xe4)
+	case "added": return tui.STATUS_ADDED
+	case "modified": return tui.STATUS_MODIFIED
+	case "deleted": return tui.STATUS_DELETED
+	case "muted": return tui.RAMP_FAINT
+	case "accent": return tui.ACCENT
 	}
 	if len(value) == 7 && value[0] == '#' {
 		packed, ok := strconv.parse_u64(value[1:], 16)
-		if ok do return tui.rgb(u8(packed >> 16), u8(packed >> 8), u8(packed))
+		if ok do return tui.cube(u8(packed >> 16), u8(packed >> 8), u8(packed))
 	}
 	return tui.DEFAULT_COLOR
 }

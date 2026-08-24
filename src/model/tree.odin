@@ -17,6 +17,11 @@ Tree_Row :: struct {
 	is_dir:   bool,
 	depth:    int,
 	expanded: bool,
+	// Guide data: whether this row is its parent's last child, and for each ancestor
+	// level whether that ancestor still has siblings below. Together they decide
+	// between "│" and blank for every indent column.
+	is_last:  bool,
+	ancestors: []bool,
 }
 
 Cached_Listing :: struct {
@@ -29,6 +34,9 @@ Tree :: struct {
 	expanded:    [dynamic]string,
 	cache:       [dynamic]Cached_Listing,
 	show_hidden: bool,
+	// Explorer mode: list only the current directory and never descend, so entering
+	// a folder re-roots the tree instead of unfolding it in place.
+	flat:        bool,
 	allocator:   runtime.Allocator,
 }
 
@@ -164,30 +172,52 @@ tree_children :: proc(tree: ^Tree, dir: string) -> []Entry {
 	return tree.cache[len(tree.cache) - 1].entries[:]
 }
 
-tree_walk :: proc(tree: ^Tree, dir: string, depth: int, rows: ^[dynamic]Tree_Row) {
+tree_walk :: proc(tree: ^Tree, dir: string, depth: int, trail: []bool, rows: ^[dynamic]Tree_Row) {
+	visible := make([dynamic]Entry, context.temp_allocator)
 	for entry in tree_children(tree, dir) {
 		if !visible_entry(entry.name, tree.show_hidden) do continue
+		append(&visible, entry)
+	}
+	for entry, index in visible {
 		path, _ := filepath.join([]string{dir, entry.name}, tree.allocator)
-		expanded := entry.is_dir && tree_is_expanded(tree, path)
+		expanded := entry.is_dir && !tree.flat && tree_is_expanded(tree, path)
+		last := index == len(visible) - 1
+		ancestors := make([]bool, len(trail), tree.allocator)
+		copy(ancestors, trail)
 		append(rows, Tree_Row{
 			path = path,
 			name = entry.name,
 			is_dir = entry.is_dir,
 			depth = depth,
 			expanded = expanded,
+			is_last = last,
+			ancestors = ancestors,
 		})
-		if expanded do tree_walk(tree, path, depth + 1, rows)
+		if expanded && !tree.flat {
+			// A row's own connector already shows its relationship to its parent, so
+			// the ancestor columns start one level up: top-level children carry none.
+			child_trail: []bool
+			if depth > 0 {
+				child_trail = make([]bool, len(trail) + 1, context.temp_allocator)
+				copy(child_trail, trail)
+				child_trail[len(trail)] = !last
+			}
+			tree_walk(tree, path, depth + 1, child_trail, rows)
+		}
 	}
 }
 
 tree_rows :: proc(tree: ^Tree, allocator := context.allocator) -> [dynamic]Tree_Row {
 	rows := make([dynamic]Tree_Row, allocator)
-	tree_walk(tree, tree.root, 0, &rows)
+	tree_walk(tree, tree.root, 0, nil, &rows)
 	return rows
 }
 
 tree_rows_destroy :: proc(rows: ^[dynamic]Tree_Row) {
-	for row in rows do delete(row.path)
+	for row in rows {
+		delete(row.path)
+		delete(row.ancestors)
+	}
 	delete(rows^)
 	rows^ = nil
 }

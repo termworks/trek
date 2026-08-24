@@ -208,3 +208,77 @@ buffer_flush :: proc(buffer: ^Buffer) -> bool {
 	_, err := os.write_string(os.stdout, output)
 	return err == nil
 }
+
+// Where a sized viewport sits inside the terminal.
+Align :: enum {
+	Center,
+	Top_Left,
+	Top_Right,
+	Bottom_Left,
+	Bottom_Right,
+}
+
+align_parse :: proc(value: string) -> (Align, bool) {
+	switch value {
+	case "center": return .Center, true
+	case "top-left": return .Top_Left, true
+	case "top-right": return .Top_Right, true
+	case "bottom-left": return .Bottom_Left, true
+	case "bottom-right": return .Bottom_Right, true
+	}
+	return .Center, false
+}
+
+// The rect a viewport of `width` x `height` occupies in a terminal of `columns` x
+// `rows`. A request of zero, or one larger than the terminal, means "all of it", so
+// a configured size never makes trek smaller than the space it was given by accident.
+viewport_rect :: proc(columns, rows, width, height: int, align: Align) -> Rect {
+	w := width <= 0 ? columns : min(width, columns)
+	h := height <= 0 ? rows : min(height, rows)
+	x, y := 0, 0
+	switch align {
+	case .Center:
+		x = (columns - w) / 2
+		y = (rows - h) / 2
+	case .Top_Left:
+	case .Top_Right:
+		x = columns - w
+	case .Bottom_Left:
+		y = rows - h
+	case .Bottom_Right:
+		x = columns - w
+		y = rows - h
+	}
+	return Rect{x = max(x, 0), y = max(y, 0), width = w, height = h}
+}
+
+// Copy one buffer into another at an offset. Cells outside the destination are
+// dropped rather than wrapping.
+buffer_blit :: proc(dst: ^Buffer, src: ^Buffer, x, y: int) {
+	for row in 0 ..< src.height {
+		for column in 0 ..< src.width {
+			source, ok := buffer_get(src, column, row)
+			if !ok do continue
+			buffer_set(dst, x + column, y + row, source)
+		}
+	}
+}
+
+// A single-line box around a rect, for a viewport that does not fill the terminal.
+draw_frame :: proc(buffer: ^Buffer, rect: Rect, style: Style) {
+	if rect.width < 2 || rect.height < 2 do return
+	right := rect.x + rect.width - 1
+	bottom := rect.y + rect.height - 1
+	for x in rect.x + 1 ..< right {
+		buffer_set(buffer, x, rect.y, Cell{rune = '─', style = style})
+		buffer_set(buffer, x, bottom, Cell{rune = '─', style = style})
+	}
+	for y in rect.y + 1 ..< bottom {
+		buffer_set(buffer, rect.x, y, Cell{rune = '│', style = style})
+		buffer_set(buffer, right, y, Cell{rune = '│', style = style})
+	}
+	buffer_set(buffer, rect.x, rect.y, Cell{rune = '╭', style = style})
+	buffer_set(buffer, right, rect.y, Cell{rune = '╮', style = style})
+	buffer_set(buffer, rect.x, bottom, Cell{rune = '╰', style = style})
+	buffer_set(buffer, right, bottom, Cell{rune = '╯', style = style})
+}

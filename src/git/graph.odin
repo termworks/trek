@@ -13,6 +13,8 @@ Commit :: struct {
 	author:    string,
 	timestamp: i64,
 	subject:   string,
+	// git's own default %ad rendering, so the date reads exactly as `git tree` shows it.
+	date:      string,
 }
 
 History :: struct {
@@ -28,6 +30,7 @@ commit_destroy :: proc(commit: ^Commit) {
 	delete(commit.refs)
 	delete(commit.author)
 	delete(commit.subject)
+	delete(commit.date)
 	commit^ = {}
 }
 
@@ -52,7 +55,7 @@ parse_log :: proc(raw: string, allocator := context.allocator) -> History {
 	history := History{commits = make([dynamic]Commit, allocator), allocator = allocator}
 	offset := 0
 	for offset < len(raw) {
-		fields: [6]string
+		fields: [7]string
 		complete := true
 		for index in 0 ..< len(fields) {
 			if offset >= len(raw) {
@@ -71,14 +74,15 @@ parse_log :: proc(raw: string, allocator := context.allocator) -> History {
 			refs = split_owned(fields[2], ",", allocator),
 			author = strings.clone(fields[3], allocator),
 			timestamp = timestamp,
-			subject = strings.clone(fields[5], allocator),
+			date = strings.clone(strings.trim_space(fields[5]), allocator),
+			subject = strings.clone(fields[6], allocator),
 		})
 	}
 	return history
 }
 
 repo_history :: proc(repo: ^Git_Repo, allocator := context.allocator) -> (History, string, bool) {
-	output := run(repo.root, []string{"log", "--all", "--parents", "--date-order", "--pretty=format:%H%x00%P%x00%D%x00%an%x00%at%x00%s%x00"}, allocator)
+	output := run(repo.root, []string{"log", "--all", "--parents", "--date-order", "--pretty=format:%H%x00%P%x00%D%x00%an%x00%at%x00%ad%x00%s%x00"}, allocator)
 	defer output_destroy(&output, allocator)
 	if !output_ok(&output) do return {}, output_message(&output, allocator), false
 	return parse_log(string(output.stdout), allocator), "", true

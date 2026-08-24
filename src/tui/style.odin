@@ -28,6 +28,16 @@ rgb :: proc(r, g, b: u8) -> Color {
 	return Color{kind = .RGB, r = r, g = g, b = b}
 }
 
+// Nearest entry in the 6x6x6 colour cube (16-231). File-type icons carry brand
+// colours as hex, but resolving them through the cube keeps every colour trek emits
+// an index, so a themed palette stays in charge of the rest of the range.
+cube :: proc(r, g, b: u8) -> Color {
+	step :: proc(value: u8) -> int {
+		return (int(value) * 5 + 127) / 255
+	}
+	return Color{kind = .Indexed, index = u8(16 + 36 * step(r) + 6 * step(g) + step(b))}
+}
+
 Attribute :: enum {
 	Bold,
 	Dim,

@@ -6,13 +6,11 @@ import tui "../tui"
 
 Row_Kind :: enum {
 	Generic,
-	Repo_Header,
 	Commit_Box,
 	Commit_Button,
 	Section_Header,
 	Git_Entry,
 	Graph_Commit,
-	Drawer_Header,
 }
 
 Row :: struct {
@@ -24,7 +22,6 @@ Row :: struct {
 	is_dir:     bool,
 	expanded:   bool,
 	kind:       Row_Kind,
-	repo_index: int,
 	entry_index: int,
 	staged:     bool,
 	input_value: string,
@@ -33,13 +30,19 @@ Row :: struct {
 
 Tab_Heading :: struct {
 	title:  string,
+	// A filesystem path, which the header abbreviates from the root end when it does
+	// not fit rather than clipping the part the reader cares about.
+	is_path: bool,
 	detail: string,
 	meta:   string,
 }
 
+// A Row owns both strings. They are never aliased: freeing one and hoping the other
+// pointed at it is how the changes tab leaked an id per entry.
 rows_destroy :: proc(rows: ^[dynamic]Row) {
 	for &row in rows {
 		tui.node_destroy(&row.node)
+		delete(row.id)
 		delete(row.path)
 	}
 	delete(rows^)
@@ -50,13 +53,23 @@ Tab_Result :: struct {
 	rows_changed: bool,
 	open_menu:    bool,
 	quit:         bool,
+	// Usually a literal. A tab that computed the string sets owns_message, and the
+	// shell frees it after copying it into the footer; without that flag every
+	// computed message leaks, because the shell always clones what it is given.
 	message:      string,
+	owns_message: bool,
 	open_path:    string,
 	root_path:    string,
 	switch_tab:   string,
+	// After the rows are rebuilt, put the cursor on this row if it still exists;
+	// otherwise, when select_first is set, on the first selectable row.
+	select_id:    string,
+	select_first: bool,
 }
 
-Rows_Proc :: proc(data: rawptr, allocator: runtime.Allocator) -> [dynamic]Row
+// `width` is the content width the rows will be drawn into. A provider that wraps
+// text needs it at build time, because a Row's height is fixed once it is built.
+Rows_Proc :: proc(data: rawptr, width: int, allocator: runtime.Allocator) -> [dynamic]Row
 Key_Proc :: proc(data: rawptr, key: tui.Key, selected: ^Row) -> Tab_Result
 Select_Proc :: proc(data: rawptr, selected: ^Row) -> Tab_Result
 Menu_Proc :: proc(data: rawptr, selected: ^Row) -> []model.Menu_Entry
@@ -66,7 +79,9 @@ Focus_Proc :: proc(data: rawptr) -> Tab_Result
 Paste_Proc :: proc(data: rawptr, value: string, selected: ^Row) -> Tab_Result
 Root_Proc :: proc(data: rawptr, root: string) -> Tab_Result
 Heading_Proc :: proc(data: rawptr) -> Tab_Heading
-Theme_Proc :: proc(data: rawptr, theme: model.Icon_Theme)
+// Whether the tab belongs in the activity bar right now. Called every frame, so it
+// must only read state the tab already computed, never spawn a process.
+Visible_Proc :: proc(data: rawptr) -> bool
 
 Tab :: struct {
 	name:      string,
@@ -83,12 +98,12 @@ Tab :: struct {
 	on_paste:  Paste_Proc,
 	on_root:   Root_Proc,
 	heading:   Heading_Proc,
-	set_theme: Theme_Proc,
+	visible:   Visible_Proc,
 }
 
-tab_rows :: proc(tab: ^Tab, allocator := context.allocator) -> [dynamic]Row {
+tab_rows :: proc(tab: ^Tab, width: int, allocator := context.allocator) -> [dynamic]Row {
 	if tab.rows == nil do return make([dynamic]Row, allocator)
-	return tab.rows(tab.data, allocator)
+	return tab.rows(tab.data, width, allocator)
 }
 
 tab_key :: proc(tab: ^Tab, key: tui.Key, selected: ^Row) -> Tab_Result {
@@ -136,6 +151,10 @@ tab_heading :: proc(tab: ^Tab) -> Tab_Heading {
 	return tab.heading(tab.data)
 }
 
-tab_set_theme :: proc(tab: ^Tab, theme: model.Icon_Theme) {
-	if tab.set_theme != nil do tab.set_theme(tab.data, theme)
+
+// A tab with no predicate is always shown.
+tab_visible :: proc(tab: ^Tab) -> bool {
+	if tab == nil do return false
+	if tab.visible == nil do return true
+	return tab.visible(tab.data)
 }

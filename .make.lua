@@ -233,6 +233,24 @@ make.recipe{
 make.alias("r", "run")
 
 make.recipe{
+  name = "run-bordered",
+  desc = "run it in a sized, centred box instead of the whole terminal",
+  deps = { "dev" },
+  params = {
+    { "--width", desc = "viewport columns (default 50)" },
+    { "--height", desc = "viewport rows (default 30)" },
+    { "--align", desc = "center, top-left, top-right, bottom-left, bottom-right" },
+  },
+  run = function(a)
+    local argv = { "--width", tostring(a.width or 50), "--height", tostring(a.height or 30) }
+    if a.align then argv[#argv + 1] = "--align"; argv[#argv + 1] = a.align end
+    for _, word in ipairs(a.rest or {}) do argv[#argv + 1] = word end
+    sh["./" .. BIN](table.unpack(argv))
+  end,
+}
+make.alias("rb", "run-bordered")
+
+make.recipe{
   name = "smoke",
   desc = "launch in a PTY and wait for delayed input",
   deps = { "build" },
@@ -245,13 +263,13 @@ make.recipe{
     sh.mkdir("-p", scratch .. "/config", scratch .. "/state")
     local command = ("set -o pipefail; " ..
       "(sleep 1; printf 2; sleep .2; printf 3; sleep .2; printf 1; " ..
-      "sleep .2; printf s; sleep .2; printf q; sleep .2; printf q) | " ..
+      "sleep .2; printf '\\033[B'; sleep .2; printf m; sleep .2; printf q; sleep .2; printf q) | " ..
       "env HOME=%q XDG_CONFIG_HOME=%q XDG_STATE_HOME=%q " ..
       "script -qefc './%s .' /dev/null >%q 2>&1"):format(
         scratch, scratch .. "/config", scratch .. "/state", BIN, output)
     assert(oslo.run{ "bash", "-c", command }.ok,
            "trek exited before delayed terminal input; see " .. output)
-    for _, text in ipairs({ "TREK", "Source Control", "Git Graph", "Settings" }) do
+    for _, text in ipairs({ "TREK", "Changes", "Git Graph", "NEW", "Actions" }) do
       assert(oslo.run{ "grep", "-aF", text, output, capture = true }.ok,
              "trek did not render " .. text .. "; see " .. output)
     end
@@ -350,3 +368,41 @@ make.recipe{ name = "uninstall", desc = "take it back out of $PREFIX/bin",
 make.recipe{ name = "verify", desc = "the whole local gate",
              deps = { "fmt-check", "check", "test", "smoke" } }
 make.alias("v", "verify")
+
+------------------------------------------------------------------------- demos
+
+-- asciinema recordings for the README. Headless: asciinema owns the pty, tmux renders trek into
+-- it, and the recorder sends keys from outside -- so this runs over ssh exactly as it runs here.
+make.recipe{
+  name = "demo",
+  desc = "record the asciinema casts: --only <slug> for one",
+  deps = { "build" },
+  params = { { "--only", desc = "record just this demo" } },
+  run = function(a)
+    need("asciinema", "asciinema is not installed; install it first")
+    need("tmux", "tmux is not installed; install it first")
+    local names = {}
+    if a.only then
+      names[1] = "scripts/demo/" .. a.only .. ".demo"
+      assert(oslo.fs.stat(names[1]), "no such demo: " .. a.only)
+    else
+      names = oslo.fs.glob("scripts/demo/*.demo")
+      table.sort(names)
+    end
+    assert(#names > 0, "no demo scripts in scripts/demo/")
+    for _, demo in ipairs(names) do
+      print(oslo.ui.style(oslo.path.name(demo), { bold = true }))
+      sh["./scripts/demo/record.sh"](demo)
+    end
+  end,
+}
+
+make.recipe{
+  name = "demo-publish",
+  desc = "upload the casts and write them into the README",
+  run = function(a)
+    need("asciinema", "asciinema is not installed; install it first")
+    sh["./scripts/demo/publish.sh"]()
+    sh["./scripts/demo/embed.sh"]()
+  end,
+}

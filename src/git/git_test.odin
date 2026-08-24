@@ -4,6 +4,7 @@ import "core:os"
 import "core:path/filepath"
 import "core:strings"
 import "core:testing"
+import "core:time"
 
 git_test_dir :: proc(t: ^testing.T) -> string {
 	path, err := os.make_directory_temp("", "trek-git-*", context.allocator)
@@ -215,7 +216,7 @@ test_graph_collapses_lane_overflow :: proc(t: ^testing.T) {
 
 @(test)
 test_graph_log_parser_reads_refs :: proc(t: ^testing.T) {
-	raw := "abc\u0000def 123\u0000HEAD -> main, tag: v1\u0000Ada\u00001700000000\u0000subject\u0000"
+	raw := "abc\u0000def 123\u0000HEAD -> main, tag: v1\u0000Ada\u00001700000000\u0000Mon Nov 14 22:13:20 2023 +0000\u0000subject\u0000"
 	history := parse_log(raw)
 	defer history_destroy(&history)
 	testing.expect_value(t, len(history.commits), 1)
@@ -223,4 +224,41 @@ test_graph_log_parser_reads_refs :: proc(t: ^testing.T) {
 	testing.expect_value(t, len(history.commits[0].refs), 2)
 	testing.expect_value(t, history.commits[0].refs[0], "HEAD -> main")
 	testing.expect_value(t, history.commits[0].timestamp, i64(1700000000))
+	testing.expect_value(t, history.commits[0].date, "Mon Nov 14 22:13:20 2023 +0000")
+	testing.expect_value(t, history.commits[0].subject, "subject")
+}
+
+// A hook that never returns is the realistic way git hangs, and trek runs git from
+// the same thread that draws the screen: without a deadline the whole application
+// stops responding with no way out.
+@(test)
+test_run_kills_a_command_that_exceeds_the_timeout :: proc(t: ^testing.T) {
+	root, err := os.make_directory_temp("", "trek-git-timeout-*", context.allocator)
+	testing.expect(t, err == nil)
+	defer { _ = os.remove_all(root); delete(root) }
+	git_test_run(t, root, []string{"init", "-q"})
+	hooks, _ := filepath.join([]string{root, ".git", "hooks"}, context.allocator)
+	defer delete(hooks)
+	_ = os.make_directory_all(hooks)
+	hook, _ := filepath.join([]string{hooks, "pre-commit"}, context.allocator)
+	defer delete(hook)
+	testing.expect(t, os.write_entire_file_from_string(hook, "#!/bin/sh\nsleep 60\n") == nil)
+	_ = os.chmod(hook, os.Permissions{.Read_User, .Write_User, .Execute_User, .Read_Group, .Execute_Group, .Read_Other, .Execute_Other})
+
+	tracked, _ := filepath.join([]string{root, "a.txt"}, context.allocator)
+	defer delete(tracked)
+	_ = os.write_entire_file_from_string(tracked, "x")
+	git_test_run(t, root, []string{"add", "-A"})
+
+
+	started := time.now()
+	output := run(root, []string{"-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "x"}, timeout = 300 * time.Millisecond)
+	elapsed := time.since(started)
+	defer output_destroy(&output)
+
+	testing.expect(t, !output_ok(&output), "a killed commit must not report success")
+	testing.expect(t, elapsed < 10 * time.Second, "run returned only after the real budget")
+	message := output_message(&output)
+	defer delete(message)
+	testing.expect_value(t, message, "git timed out")
 }

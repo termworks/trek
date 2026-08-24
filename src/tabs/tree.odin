@@ -1,5 +1,4 @@
 package tabs
-
 import "base:runtime"
 import "core:encoding/base64"
 import "core:fmt"
@@ -9,132 +8,130 @@ import "core:strings"
 import gitcore "../git"
 import model "../model"
 import tui "../tui"
-
 Tree_Tab :: struct {
-	tree:        model.Tree,
-	theme:       model.Icon_Theme,
-	repos:       [dynamic]gitcore.Git_Repo,
-	decorations: gitcore.Decorations,
-	git_decorations: bool,
+	// Directory -> the row that was selected there.
+	history: map[string]string,
+	tree: model.Tree,
 }
 
-tree_tab_new :: proc(
-	root: string,
-	theme := model.Icon_Theme.Emoji,
-	show_hidden := false,
-	git_decorations := true,
-	allocator := context.allocator,
-) -> ^Tree_Tab {
+tree_tab_new :: proc(root: string, show_hidden := false, explore := false, allocator := context.allocator) -> ^Tree_Tab {
 	state := new(Tree_Tab, allocator)
 	model.tree_init(&state.tree, root, allocator)
-	state.theme = theme
 	state.tree.show_hidden = show_hidden
-	state.git_decorations = git_decorations
-	gitcore.decorations_init(&state.decorations, allocator)
-	tree_git_refresh(state)
+	state.tree.flat = explore
+	state.history = make(map[string]string, allocator)
 	return state
-}
-
-tree_git_refresh :: proc(state: ^Tree_Tab) {
-	gitcore.repos_destroy(&state.repos)
-	gitcore.decorations_destroy(&state.decorations)
-	gitcore.decorations_init(&state.decorations, state.tree.allocator)
-	if !state.git_decorations do return
-	state.repos = gitcore.discover_all(state.tree.root, allocator = state.tree.allocator)
-	for &repo in state.repos {
-		status, status_message, ok := gitcore.repo_status(&repo, state.tree.allocator)
-		delete(status_message)
-		if !ok do continue
-		ignored, ignored_message, have_ignored := gitcore.repo_ignored(&repo, state.tree.allocator)
-		delete(ignored_message)
-		if have_ignored {
-			gitcore.decorations_add_status(&state.decorations, repo.root, &status, ignored[:])
-			gitcore.ignored_destroy(&ignored)
-		} else {
-			gitcore.decorations_add_status(&state.decorations, repo.root, &status)
-		}
-		gitcore.status_destroy(&status)
-	}
 }
 
 tree_icon_style :: proc(icon: model.Icon) -> tui.Style {
 	if !icon.colored do return tui.PLAIN_STYLE
-	return tui.Style{fg = tui.rgb(icon.r, icon.g, icon.b), bg = tui.DEFAULT_COLOR}
+	return tui.Style{fg = tui.cube(icon.r, icon.g, icon.b), bg = tui.DEFAULT_COLOR}
 }
 
-status_style :: proc(letter: rune) -> tui.Style {
-	style := tui.Style{fg = tui.status_color(letter), bg = tui.DEFAULT_COLOR}
-	if letter == 'I' do style.attrs = {.Dim}
-	return style
-}
-
-status_text :: proc(letter: rune) -> string {
-	switch letter {
-	case 'M': return "M"
-	case 'U': return "U"
-	case 'A': return "A"
-	case 'R': return "R"
-	case 'C': return "C"
-	case 'D': return "D"
-	case '!': return "!"
+// elbow or tee that joins this row to its parent.
+tree_guides :: proc(row: ^model.Tree_Row, allocator: runtime.Allocator) -> string {
+	if row.depth == 0 do return ""
+	builder := strings.builder_make(allocator)
+	for more in row.ancestors {
+		strings.write_string(&builder, more ? "│ " : "  ")
 	}
-	return ""
+	strings.write_string(&builder, row.is_last ? "└ " : "├ ")
+	return strings.to_string(builder)
 }
 
-tree_row_node :: proc(
-	state: ^Tree_Tab,
-	row: ^model.Tree_Row,
-	letter: rune,
-	has_status: bool,
-	allocator: runtime.Allocator,
-) -> tui.Node {
+// The guide columns a wrapped line sits under: the same ancestors, plus this row's
+// own level. A row that is its parent's last child has nothing below it, so that
+// column becomes blank rather than a pipe.
+tree_guides_continued :: proc(row: ^model.Tree_Row, allocator: runtime.Allocator) -> string {
+	if row.depth == 0 do return strings.clone("", allocator)
+	builder := strings.builder_make(allocator)
+	for more in row.ancestors {
+		strings.write_string(&builder, more ? "│ " : "  ")
+	}
+	strings.write_string(&builder, row.is_last ? "  " : "│ ")
+	return strings.to_string(builder)
+}
+
+// Columns before the name: the guides, the disclosure chevron, the icon and a space.
+tree_prefix_width :: proc(row: ^model.Tree_Row) -> int {
+	guides := 0
+	if row.depth > 0 do guides = (len(row.ancestors) + 1) * 2
+	return guides + 4
+}
+
+// The name as it is drawn: directories carry a trailing separator.
+tree_display_name :: proc(row: ^model.Tree_Row, allocator: runtime.Allocator) -> string {
+	if row.is_dir do return strings.concatenate([]string{row.name, "/"}, allocator)
+	return strings.clone(row.name, allocator)
+}
+
+// A name too long for the pane wraps under itself rather than ending in an ellipsis.
+// Filenames differ at the end at least as often as at the start — `report-2026-01.csv`
+// against `report-2026-02.csv` — so cutting the tail hides exactly what identifies them.
+tree_name_lines :: proc(row: ^model.Tree_Row, width: int) -> [dynamic]string {
+	name := tree_display_name(row, context.temp_allocator)
+	room := max(width - tree_prefix_width(row) - 2, 8)
+	return tui.wrap_name(name, room, context.temp_allocator)
+}
+
+tree_row_height :: proc(row: ^model.Tree_Row, width: int) -> int {
+	return len(tree_name_lines(row, width))
+}
+
+tree_row_node :: proc(state: ^Tree_Tab, row: ^model.Tree_Row, width: int, allocator: runtime.Allocator) -> tui.Node {
 	chevron := "  "
 	if row.is_dir {
-		if row.expanded {
-			chevron = "▾ "
-		} else {
-			chevron = "▸ "
-		}
+		chevron = row.expanded ? "▾ " : "▸ "
 	}
-	icon := model.file_icon(state.theme, row.name, row.is_dir, row.expanded)
-	name_style := tui.PLAIN_STYLE
-	if has_status do name_style = status_style(letter)
-	marker := ""
-	if has_status && letter != 'I' {
-		if row.is_dir {
-			marker = "●"
-		} else {
-			marker = status_text(letter)
-		}
+	icon := model.file_icon(row.name, row.is_dir, row.expanded)
+	icon_style := tree_icon_style(icon)
+	// A directory takes the accent for both glyph and name; a file takes its own type
+	// colour for both, so icon and name always agree about what the row is.
+	name_style := icon_style
+	if row.is_dir {
+		icon_style = tui.Style{fg = tui.ACCENT}
+		name_style = tui.Style{fg = tui.ACCENT}
 	}
-	content := tui.row([]tui.Node{
-		tui.transparent(row.depth * 2),
-		tui.text(chevron, tui.Style{attrs = {.Dim}}),
-		tui.text(icon.glyph, tree_icon_style(icon)),
-		tui.text(" "),
-		tui.priority(tui.truncate(tui.text(row.name, name_style), 0), 0, allocator),
-		tui.spacer(),
-		tui.text(marker, tui.merge_style(status_style(letter), tui.Style{attrs = {.Bold}})),
-		tui.transparent(2),
-	}, allocator)
+	guide_style := tui.Style{fg = tui.RAMP_BORDER, attrs = {.Dim}}
+
+	lines := tree_name_lines(row, width)
+	rows := make([dynamic]tui.Node, allocator)
+	defer delete(rows)
+	for line, index in lines {
+		children := make([dynamic]tui.Node, allocator)
+		defer delete(children)
+		if index == 0 {
+			append(&children, tui.owned_text(tree_guides(row, allocator), guide_style))
+			append(&children, tui.text(chevron, tui.Style{attrs = {.Dim}}))
+			append(&children, tui.text(icon.glyph, icon_style))
+			append(&children, tui.text(" "))
+		} else {
+			append(&children, tui.owned_text(tree_guides_continued(row, allocator), guide_style))
+			append(&children, tui.priority(tui.transparent(4), 100, allocator))
+		}
+		append(&children, tui.owned_text(strings.clone(line, allocator), name_style))
+		append(&children, tui.spacer())
+		append(&children, tui.priority(tui.transparent(2), 100, allocator))
+		append(&rows, tui.row(children[:], allocator))
+	}
+	content := tui.column(rows[:], allocator)
 	return tui.region(content, row.path, []string{"open", "menu"}, allocator = allocator)
 }
 
-tree_rows_proc :: proc(data: rawptr, allocator: runtime.Allocator) -> [dynamic]Row {
+tree_rows_proc :: proc(data: rawptr, width: int, allocator: runtime.Allocator) -> [dynamic]Row {
 	state := (^Tree_Tab)(data)
 	model_rows := model.tree_rows(&state.tree, allocator)
 	rows := make([dynamic]Row, 0, len(model_rows), allocator)
 	for &model_row in model_rows {
-		letter, has_status := gitcore.decorations_letter(&state.decorations, model_row.path, model_row.is_dir)
 		append(&rows, Row{
-			id = model_row.path,
+			id = strings.clone(model_row.path, allocator),
 			path = model_row.path,
 			depth = model_row.depth,
 			selectable = true,
-			height = 1,
+			height = tree_row_height(&model_row, width),
 			is_dir = model_row.is_dir,
 			expanded = model_row.expanded,
-			node = tree_row_node(state, &model_row, letter, has_status, allocator),
+			node = tree_row_node(state, &model_row, width, allocator),
 		})
 		model_row.path = ""
 	}
@@ -142,8 +139,59 @@ tree_rows_proc :: proc(data: rawptr, allocator: runtime.Allocator) -> [dynamic]R
 	return rows
 }
 
+// Remember which row was selected in a directory, so returning to it puts the cursor
+// back where it was rather than at the top.
+tree_remember :: proc(state: ^Tree_Tab, dir, selected: string) {
+	if dir == "" || selected == "" do return
+	if existing, found := state.history[dir]; found {
+		delete(existing)
+		state.history[dir] = strings.clone(selected, state.tree.allocator)
+		return
+	}
+	state.history[strings.clone(dir, state.tree.allocator)] = strings.clone(selected, state.tree.allocator)
+}
+
+// Re-root the tree somewhere else, keeping the explorer mode and hidden-file choice.
+// `selected` is the row the cursor was on, which is what makes coming back work.
+tree_reroot :: proc(state: ^Tree_Tab, path: string, selected: string) -> Tab_Result {
+	previous := strings.clone(state.tree.root, context.temp_allocator)
+	tree_remember(state, previous, selected)
+	// Climbing out: the directory just left is the row to land on up there.
+	parent := filepath.dir(previous, context.temp_allocator)
+	if parent == path do tree_remember(state, path, previous)
+
+	flat := state.tree.flat
+	hidden := state.tree.show_hidden
+	allocator := state.tree.allocator
+	root := strings.clone(path, allocator)
+	defer delete(root, allocator)
+	model.tree_destroy(&state.tree)
+	model.tree_init(&state.tree, root, allocator)
+	state.tree.flat = flat
+	state.tree.show_hidden = hidden
+
+	remembered := ""
+	if value, found := state.history[state.tree.root]; found do remembered = value
+	return Tab_Result{
+		rows_changed = true,
+		root_path = state.tree.root,
+		open_path = state.tree.root,
+		select_id = remembered,
+		select_first = true,
+	}
+}
+
+// The parent of the current root, or nothing when already at the filesystem top.
+tree_parent :: proc(state: ^Tree_Tab, selected: string) -> Tab_Result {
+	parent := filepath.dir(state.tree.root, context.temp_allocator)
+	if parent == "" || parent == state.tree.root do return Tab_Result{message = "already at the top"}
+	return tree_reroot(state, parent, selected)
+}
+
 tree_selected_toggle :: proc(state: ^Tree_Tab, selected: ^Row) -> Tab_Result {
 	if selected == nil || !selected.is_dir do return {}
+	// Explorer mode walks into a directory; tree mode unfolds it where it stands.
+	if state.tree.flat do return tree_reroot(state, selected.path, selected.path)
 	model.tree_toggle(&state.tree, selected.path)
 	return Tab_Result{rows_changed = true, open_path = selected.path}
 }
@@ -155,21 +203,29 @@ tree_select_proc :: proc(data: rawptr, selected: ^Row) -> Tab_Result {
 tree_key_proc :: proc(data: rawptr, key: tui.Key, selected: ^Row) -> Tab_Result {
 	state := (^Tree_Tab)(data)
 	if key.code == .Enter || key.code == .Right {
-		if selected != nil && selected.is_dir && !selected.expanded do return tree_selected_toggle(state, selected)
+		if selected != nil && selected.is_dir && (state.tree.flat || !selected.expanded) {
+			return tree_selected_toggle(state, selected)
+		}
 		if key.code == .Enter do return tree_selected_toggle(state, selected)
 	}
-	if key.code == .Left && selected != nil && selected.is_dir && selected.expanded do return tree_selected_toggle(state, selected)
+	if key.code == .Left {
+		// In explorer mode Left is "go up"; in tree mode it folds the row back.
+		if state.tree.flat do return tree_parent(state, selected_path(selected))
+		if selected != nil && selected.is_dir && selected.expanded do return tree_selected_toggle(state, selected)
+	}
+	if key.code == .Backspace && state.tree.flat do return tree_parent(state, selected_path(selected))
 	if key.code != .Rune do return {}
 	switch key.rune {
 	case '.':
 		state.tree.show_hidden = !state.tree.show_hidden
 		return Tab_Result{rows_changed = true, message = "hidden files toggled"}
-	case 'i':
-		state.theme = model.icon_theme_toggle(state.theme)
-		return Tab_Result{rows_changed = true, message = "icon theme toggled"}
+	case 'a':
+		state.tree.flat = !state.tree.flat
+		model.tree_collapse_all(&state.tree)
+		model.tree_refresh(&state.tree)
+		return Tab_Result{rows_changed = true, message = state.tree.flat ? "explorer mode" : "tree mode"}
 	case 'r':
 		model.tree_refresh(&state.tree)
-		tree_git_refresh(state)
 		return Tab_Result{rows_changed = true, message = "tree refreshed"}
 	case 'c':
 		model.tree_collapse_all(&state.tree)
@@ -242,7 +298,6 @@ tree_action_proc :: proc(data: rawptr, selected: ^Row, action: model.Action, val
 		model.tree_destroy(&state.tree)
 		model.tree_init(&state.tree, value)
 		model.tree_refresh(&state.tree)
-		tree_git_refresh(state)
 		return Tab_Result{rows_changed = true, message = "tree updated", root_path = state.tree.root}
 	case .Copy_Path, .Copy_Relative_Path:
 		path, copied := tree_copy_path(state, selected, action == .Copy_Relative_Path)
@@ -266,36 +321,39 @@ tree_action_proc :: proc(data: rawptr, selected: ^Row, action: model.Action, val
 		if result.count == 0 && result.skipped_nested > 0 {
 			return Tab_Result{message = "nothing staged; nested repository boundary"}
 		}
-		tree_git_refresh(state)
 		return Tab_Result{rows_changed = true, message = "changes staged"}
 	}
 	model.tree_refresh(&state.tree)
-	tree_git_refresh(state)
 	return Tab_Result{rows_changed = true, message = "tree updated"}
 }
 
 tree_destroy_proc :: proc(data: rawptr) {
 	state := (^Tree_Tab)(data)
 	allocator := state.tree.allocator
-	gitcore.repos_destroy(&state.repos)
-	gitcore.decorations_destroy(&state.decorations)
+	for key, value in state.history {
+		delete(key)
+		delete(value)
+	}
+	delete(state.history)
 	model.tree_destroy(&state.tree)
 	free(state, allocator)
 }
 
 tree_heading_proc :: proc(data: rawptr) -> Tab_Heading {
 	state := (^Tree_Tab)(data)
+	// Explorer mode moves between directories, so the full path is the context that
+	// matters; tree mode stays rooted and only needs the folder name.
+	if state.tree.flat do return Tab_Heading{title = state.tree.root, is_path = true}
 	return Tab_Heading{title = filepath.base(state.tree.root)}
 }
 
 tree_tab :: proc(
 	root: string,
-	theme := model.Icon_Theme.Emoji,
 	show_hidden := false,
-	git_decorations := true,
+	explore := false,
 	allocator := context.allocator,
 ) -> Tab {
-	state := tree_tab_new(root, theme, show_hidden, git_decorations, allocator)
+	state := tree_tab_new(root, show_hidden, explore, allocator)
 	return Tab{
 		name = "tree",
 		title = "Explorer",
@@ -311,22 +369,17 @@ tree_tab :: proc(
 	}
 }
 
-tree_apply_preferences :: proc(tab: ^Tab, theme: model.Icon_Theme, hidden, git_decorations: bool) -> bool {
+tree_apply_preferences :: proc(tab: ^Tab, hidden: bool) -> bool {
 	if tab == nil || tab.name != "tree" do return false
 	state := (^Tree_Tab)(tab.data)
-	state.theme = theme
 	state.tree.show_hidden = hidden
-	if state.git_decorations != git_decorations {
-		state.git_decorations = git_decorations
-		tree_git_refresh(state)
-	}
 	return true
 }
 
-tree_state :: proc(tab: ^Tab) -> (model.Icon_Theme, bool, bool, string, []string, bool) {
-	if tab == nil || tab.name != "tree" do return .Emoji, false, true, "", nil, false
+tree_state :: proc(tab: ^Tab) -> (bool, string, []string, bool) {
+	if tab == nil || tab.name != "tree" do return false, "", nil, false
 	state := (^Tree_Tab)(tab.data)
-	return state.theme, state.tree.show_hidden, state.git_decorations, state.tree.root, state.tree.expanded[:], true
+	return state.tree.show_hidden, state.tree.root, state.tree.expanded[:], true
 }
 
 tree_restore_expanded :: proc(tab: ^Tab, paths: []string) -> bool {
@@ -334,4 +387,10 @@ tree_restore_expanded :: proc(tab: ^Tab, paths: []string) -> bool {
 	state := (^Tree_Tab)(tab.data)
 	model.tree_set_expanded(&state.tree, paths)
 	return true
+}
+
+
+selected_path :: proc(selected: ^Row) -> string {
+	if selected == nil do return ""
+	return selected.path
 }

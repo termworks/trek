@@ -1,5 +1,6 @@
 package tui
 
+import "base:runtime"
 import "core:strings"
 import "core:unicode/utf8"
 
@@ -115,6 +116,248 @@ wrap_text :: proc(value: string, max_width: int, allocator := context.allocator)
 
 destroy_lines :: proc(lines: ^[dynamic]string) {
 	for line in lines {
+		delete(line)
+	}
+	delete(lines^)
+	lines^ = nil
+}
+
+// Fit a path into `max_width` by abbreviating leading segments to their first
+// character, one at a time from the root end: /home/bresilla/code/tools/trek
+// becomes /h/bresilla/code/tools/trek, then /h/b/code/tools/trek, and so on. The
+// last segment is what the reader is actually looking at, so it is never shortened
+// this way; if even the fully abbreviated form does not fit, the result is
+// truncated normally.
+shorten_path :: proc(path: string, max_width: int, allocator := context.allocator) -> string {
+	if max_width <= 0 do return strings.clone("", allocator)
+	if text_width(path) <= max_width do return strings.clone(path, allocator)
+
+	rooted := len(path) > 0 && path[0] == '/'
+	trimmed := strings.trim_suffix(path, "/")
+	segments := strings.split(trimmed, "/", context.temp_allocator)
+	// A leading "/" splits into an empty first segment; drop it and remember it.
+	start := 0
+	for start < len(segments) && segments[start] == "" do start += 1
+	if len(segments) - start <= 1 do return truncate_text(path, max_width, allocator = allocator)
+
+	// Abbreviate one more leading segment per pass, never touching the last.
+	shortened := 0
+	limit := len(segments) - start - 1
+	for {
+		builder := strings.builder_make(context.temp_allocator)
+		if rooted do strings.write_string(&builder, "/")
+		for index in start ..< len(segments) {
+			if index > start do strings.write_string(&builder, "/")
+			segment := segments[index]
+			if index - start < shortened && len(segment) > 0 {
+				strings.write_string(&builder, first_rune_text(segment))
+			} else {
+				strings.write_string(&builder, segment)
+			}
+		}
+		candidate := strings.to_string(builder)
+		if text_width(candidate) <= max_width || shortened >= limit {
+			if text_width(candidate) <= max_width do return strings.clone(candidate, allocator)
+			return truncate_text(candidate, max_width, allocator = allocator)
+		}
+		shortened += 1
+	}
+}
+
+// The first rune of a segment, as text. Taking one byte would split a multi-byte
+// character and emit a broken glyph.
+first_rune_text :: proc(value: string) -> string {
+	for _, index in value {
+		_ = index
+		for offset in 1 ..= len(value) {
+			if offset == len(value) || (value[offset] & 0xc0) != 0x80 do return value[:offset]
+		}
+	}
+	return value
+}
+
+
+// Greedy word wrap, the way `git log --format=%w` reflows a paragraph: break at
+// spaces, and hard-break a single word that is wider than the line so nothing is
+// lost off the right edge. The existing wrap_text breaks per grapheme, which is
+// right for preformatted text and wrong for prose.
+wrap_words :: proc(value: string, width: int, allocator := context.allocator) -> [dynamic]string {
+	lines := make([dynamic]string, allocator)
+	if width <= 0 {
+		append(&lines, strings.clone("", allocator))
+		return lines
+	}
+	current := strings.builder_make(context.temp_allocator)
+	used := 0
+	remaining := value
+	for word in strings.split_iterator(&remaining, " ") {
+		if word == "" do continue
+		word_width := text_width(word)
+		if used > 0 && used + 1 + word_width > width {
+			append(&lines, strings.clone(strings.to_string(current), allocator))
+			strings.builder_reset(&current)
+			used = 0
+		}
+		if used > 0 {
+			strings.write_string(&current, " ")
+			used += 1
+		}
+		if word_width > width {
+			for r in word {
+				rune_width := text_width(utf8.runes_to_string({r}, context.temp_allocator))
+				if used + rune_width > width && used > 0 {
+					append(&lines, strings.clone(strings.to_string(current), allocator))
+					strings.builder_reset(&current)
+					used = 0
+				}
+				strings.write_rune(&current, r)
+				used += rune_width
+			}
+			continue
+		}
+		strings.write_string(&current, word)
+		used += word_width
+	}
+	if used > 0 || len(lines) == 0 {
+		append(&lines, strings.clone(strings.to_string(current), allocator))
+	}
+	return lines
+}
+
+// Wrap a path, breaking after a separator rather than mid-segment. Word wrap has
+// nothing to work with here — a path contains no spaces — so it hard-breaks in the
+// middle of a directory name, which is both ugly and ambiguous. A segment wider
+// than the line still has to break somewhere.
+wrap_path :: proc(value: string, width: int, allocator := context.allocator) -> [dynamic]string {
+	return wrap_after(value, width, "/", allocator)
+}
+
+// Wrap after any of `breakers`, falling back to a hard break only for a run that is
+// wider than the line on its own.
+wrap_after :: proc(value: string, width: int, breakers: string, allocator := context.allocator) -> [dynamic]string {
+	lines := make([dynamic]string, allocator)
+	if width <= 0 || value == "" {
+		append(&lines, strings.clone(value if width > 0 else "", allocator))
+		return lines
+	}
+	current := strings.builder_make(context.temp_allocator)
+	used := 0
+	start := 0
+	for index := 0; index <= len(value); index += 1 {
+		// Cut after each separator, and once more at the end for the tail segment.
+		if index < len(value) && !strings.contains_rune(breakers, rune(value[index])) do continue
+		piece := value[start:min(index + 1, len(value))]
+		start = index + 1
+		piece_width := text_width(piece)
+		if used > 0 && used + piece_width > width {
+			append(&lines, strings.clone(strings.to_string(current), allocator))
+			strings.builder_reset(&current)
+			used = 0
+		}
+		if piece_width > width {
+			for r in piece {
+				rune_width := text_width(utf8.runes_to_string({r}, context.temp_allocator))
+				if used + rune_width > width && used > 0 {
+					append(&lines, strings.clone(strings.to_string(current), allocator))
+					strings.builder_reset(&current)
+					used = 0
+				}
+				strings.write_rune(&current, r)
+				used += rune_width
+			}
+			continue
+		}
+		strings.write_string(&current, piece)
+		used += piece_width
+	}
+	if used > 0 || len(lines) == 0 {
+		append(&lines, strings.clone(strings.to_string(current), allocator))
+	}
+	return lines
+}
+
+// Wrap a filename. Names break at the separators people actually use in them —
+// dashes, underscores and dots — so `report-2026-01.csv` splits after a dash rather
+// than through the middle of a word.
+wrap_name :: proc(value: string, width: int, allocator := context.allocator) -> [dynamic]string {
+	return wrap_after(value, width, "-_./", allocator)
+}
+
+// A run of text with its own style. Wrapping a paragraph built from these keeps the
+// styling: a plain string wrap can only paint a whole line one colour.
+Span :: struct {
+	text:  string,
+	style: Style,
+	// Never split this span across lines. A ref chip reads as one object, and half a
+	// chip at the end of a line reads as damage.
+	atomic: bool,
+}
+
+@(private = "file")
+push_span :: proc(line: ^[dynamic]Span, text: string, style: Style, allocator: runtime.Allocator) {
+	append(line, Span{text = strings.clone(text, allocator), style = style})
+}
+
+// Word-wrap a styled paragraph. Spans flow into each other exactly as their text
+// would, and every output line owns its strings.
+wrap_spans :: proc(spans: []Span, width: int, allocator := context.allocator) -> [dynamic][dynamic]Span {
+	lines := make([dynamic][dynamic]Span, allocator)
+	current := make([dynamic]Span, allocator)
+	used := 0
+	flush :: proc(lines: ^[dynamic][dynamic]Span, current: ^[dynamic]Span, used: ^int, allocator: runtime.Allocator) {
+		append(lines, current^)
+		current^ = make([dynamic]Span, allocator)
+		used^ = 0
+	}
+	for span in spans {
+		if span.text == "" do continue
+		pieces := make([dynamic]string, context.temp_allocator)
+		if span.atomic {
+			append(&pieces, span.text)
+		} else {
+			remaining := span.text
+			for word in strings.split_iterator(&remaining, " ") {
+				if word != "" do append(&pieces, word)
+			}
+		}
+		for piece in pieces {
+			piece_width := text_width(piece)
+			if used > 0 && used + 1 + piece_width > width {
+				flush(&lines, &current, &used, allocator)
+			}
+			if used > 0 {
+				push_span(&current, " ", span.style, allocator)
+				used += 1
+			}
+			if piece_width > width && !span.atomic {
+				// Longer than a line on its own: break it a rune at a time.
+				start := 0
+				run := 0
+				for r, index in piece {
+					rune_width := text_width(utf8.runes_to_string({r}, context.temp_allocator))
+					if used + rune_width > width && used > 0 {
+						push_span(&current, piece[start:index], span.style, allocator)
+						flush(&lines, &current, &used, allocator)
+						start = index
+						run = 0
+					}
+					used += rune_width
+					run += rune_width
+				}
+				if start < len(piece) do push_span(&current, piece[start:], span.style, allocator)
+				continue
+			}
+			push_span(&current, piece, span.style, allocator)
+			used += piece_width
+		}
+	}
+	append(&lines, current)
+	return lines
+}
+
+spans_destroy :: proc(lines: ^[dynamic][dynamic]Span) {
+	for &line in lines {
+		for span in line do delete(span.text)
 		delete(line)
 	}
 	delete(lines^)

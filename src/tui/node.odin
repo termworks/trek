@@ -40,6 +40,9 @@ Node :: struct {
 	hover:      Style,
 	press:      Style,
 	owns_values: bool,
+	// Shrink this node to nothing in one step instead of a column at a time. A
+	// partially eaten date or author reads as corruption, not as a narrow pane.
+	atomic:      bool,
 }
 
 nodes_copy :: proc(values: []Node, allocator := context.allocator) -> [dynamic]Node {
@@ -50,6 +53,13 @@ nodes_copy :: proc(values: []Node, allocator := context.allocator) -> [dynamic]N
 
 text :: proc(value: string, style := PLAIN_STYLE) -> Node {
 	return Node{kind = .Text, value = value, style = style}
+}
+
+// Text whose string was allocated for this node alone. node_destroy frees it, so a
+// computed label must come through here: `text` borrows, and a borrowed computed
+// string is a leak on every rebuild.
+owned_text :: proc(value: string, style := PLAIN_STYLE) -> Node {
+	return Node{kind = .Text, value = value, style = style, owns_values = true}
 }
 
 row :: proc(children: []Node, allocator := context.allocator) -> Node {
@@ -305,8 +315,13 @@ render_node :: proc(buffer: ^Buffer, layout: ^Layout, node: ^Node, rect: Rect, i
 					}
 				}
 				if chosen < 0 do break
-				widths[chosen] -= 1
-				excess -= 1
+				if node.children[chosen].atomic {
+					excess -= widths[chosen]
+					widths[chosen] = 0
+				} else {
+					widths[chosen] -= 1
+					excess -= 1
+				}
 			}
 		} else if spacer_weight > 0 {
 			remaining := rect.width - total
@@ -337,4 +352,11 @@ render_node :: proc(buffer: ^Buffer, layout: ^Layout, node: ^Node, rect: Rect, i
 
 compose :: proc(buffer: ^Buffer, layout: ^Layout, node: ^Node, rect: Rect) {
 	render_node(buffer, layout, node, rect, PLAIN_STYLE)
+}
+
+// Priority, but the node is either drawn in full or not at all.
+optional :: proc(value: Node, importance: int, allocator := context.allocator) -> Node {
+	node := priority(value, importance, allocator)
+	node.atomic = true
+	return node
 }

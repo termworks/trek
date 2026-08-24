@@ -1,0 +1,31 @@
+# Source control: three lists, and Enter moves a file between them.
+cols 100
+rows 30
+speed 0.06
+
+wait 1.4
+type 2
+wait 2.2
+
+# NEW, MODIFIED and STAGED. Enter stages what the cursor is on.
+key Down
+wait 1.2
+key Enter
+wait 2.0
+key Down
+key Enter
+wait 2.0
+
+# Enter on a staged file puts it back.
+key Down
+wait 1.0
+key Enter
+wait 2.2
+
+# The commit box takes a message; Enter commits what is staged.
+key Down
+key Down
+key Down
+wait 1.2
+type feat: draw the neighbouring tiles
+wait 1.8

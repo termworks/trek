@@ -14,10 +14,12 @@ INIT_SOURCE :: #load("../../lua/trek/init.lua")
 DEFAULT_SOURCE :: #load("../../lua/trek/default.lua")
 
 Settings :: struct {
-	icons:           string,
 	hidden:          bool,
-	git_decorations: bool,
 	start_tab:       string,
+	width:           int,
+	height:          int,
+	align:           string,
+	border:          bool,
 }
 
 Tab_Def :: struct {
@@ -163,8 +165,8 @@ engine_destroy :: proc(engine: ^Engine) {
 	delete(engine.execs)
 	for arg in engine.pending_suspend do delete(arg)
 	delete(engine.pending_suspend)
-	delete(engine.settings.icons)
 	delete(engine.settings.start_tab)
+	delete(engine.settings.align)
 	delete(engine.root)
 	delete(engine.config_path)
 	delete(engine.state_path)
