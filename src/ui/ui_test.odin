@@ -67,7 +67,7 @@ test_shell_right_click_opens_menu :: proc(t: ^testing.T) {
 	shell_init(&shell)
 	defer shell_destroy(&shell)
 	shell_add_tab(&shell, fake_tab("one"))
-	shell_mouse(&shell, tui.Mouse_Event{x = ACTIVITY_WIDTH + 2, y = HEADER_HEIGHT, button = 2, action = .Press}, 40, 12)
+	shell_mouse(&shell, tui.Mouse_Event{x = ACTIVITY_WIDTH + CONTENT_GUTTER + 2, y = HEADER_HEIGHT, button = 2, action = .Press}, 40, 12)
 	testing.expect_value(t, shell.selected, 0)
 	testing.expect_value(t, shell.overlay.kind, Overlay_Kind.Menu)
 }
@@ -111,11 +111,11 @@ test_shell_renders_headless_buffer :: proc(t: ^testing.T) {
 	tui.layout_init(&layout)
 	defer tui.layout_destroy(&layout)
 	shell_render(&shell, &buffer, &layout)
-	cell, ok := tui.buffer_get(&buffer, ACTIVITY_WIDTH + 3, 0)
+	cell, ok := tui.buffer_get(&buffer, ACTIVITY_WIDTH + CONTENT_GUTTER + 3, 0)
 	testing.expect(t, ok)
 	testing.expect_value(t, cell.rune, 'E')
 	testing.expect(t, len(layout.regions) == 0)
-	marker, marker_ok := tui.buffer_get(&buffer, 0, ACTIVITY_SLOT / 2)
+	marker, marker_ok := tui.buffer_get(&buffer, 0, shell_activity_origin(&shell, buffer.height))
 	testing.expect(t, marker_ok)
 	testing.expect_value(t, marker.rune, '▌')
 	testing.expect_value(t, marker.style.fg, tui.ACCENT)
@@ -159,14 +159,14 @@ test_graph_has_its_own_activity_slot :: proc(t: ^testing.T) {
 	defer tui.layout_destroy(&layout)
 	shell_render(&shell, &buffer, &layout)
 	// Every tab owns a slot, and only the active one carries the accent marker.
-	graph_top, graph_bottom := shell_activity_bounds(&shell, 2)
-	testing.expect_value(t, graph_top, 2 * ACTIVITY_SLOT)
+	graph_top, graph_bottom := shell_activity_bounds(&shell, 2, buffer.height)
+	testing.expect_value(t, graph_top, shell_activity_origin(&shell, buffer.height) + 2 * ACTIVITY_SLOT)
 	for y in graph_top ..< graph_bottom {
 		marker, _ := tui.buffer_get(&buffer, 0, y)
 		testing.expect_value(t, marker.rune, '▌')
 		testing.expect_value(t, marker.style.fg, tui.ACCENT)
 	}
-	changes_top, _ := shell_activity_bounds(&shell, 1)
+	changes_top, _ := shell_activity_bounds(&shell, 1, buffer.height)
 	inactive, _ := tui.buffer_get(&buffer, 0, changes_top)
 	testing.expect(t, inactive.style.fg != tui.ACCENT)
 }

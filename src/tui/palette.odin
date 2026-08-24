@@ -10,10 +10,14 @@ package tui
 BG :: Color{kind = .Indexed, index = 0}
 ACCENT :: Color{kind = .Indexed, index = 1}
 
-RAMP_SUNK :: Color{kind = .Indexed, index = 234}
-RAMP_HOVER :: Color{kind = .Indexed, index = 236}
+// 232-235 sit at or below the terminal background, so nothing that must be SEEN as a
+// surface is allowed to live there: the activity strip drawn at 234 was darker than the
+// background behind it and read as no strip at all. Raised surfaces start at 236.
+RAMP_SUNK :: Color{kind = .Indexed, index = 233}
+RAMP_RAISED :: Color{kind = .Indexed, index = 236}
+RAMP_HOVER :: Color{kind = .Indexed, index = 237}
 RAMP_SELECT :: Color{kind = .Indexed, index = 238}
-RAMP_BORDER :: Color{kind = .Indexed, index = 239}
+RAMP_BORDER :: Color{kind = .Indexed, index = 240}
 RAMP_FAINT :: Color{kind = .Indexed, index = 241}
 RAMP_MUTED :: Color{kind = .Indexed, index = 245}
 RAMP_TEXT :: Color{kind = .Indexed, index = 250}
@@ -21,7 +25,8 @@ RAMP_BRIGHT :: Color{kind = .Indexed, index = 255}
 
 SELECTED_BG :: RAMP_SELECT
 HOVER_BG :: RAMP_HOVER
-ACTIVITY_BG :: RAMP_SUNK
+ACTIVITY_BG :: RAMP_RAISED
+ACTIVITY_ACTIVE_BG :: RAMP_SELECT
 BUTTON_BG :: ACCENT
 BUTTON_FG :: BG
 
