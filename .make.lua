@@ -236,8 +236,11 @@ make.recipe{
   name = "test",
   desc = "the suite",
   run = function()
+    sh.mkdir("-p", "target/tests")
     for _, dir in ipairs(packages("*_test.odin")) do
-      sh.odin("test", dir)
+      local package_name = dir:match("([^/]+)$") or "root"
+      if dir == SRC then package_name = NAME end
+      sh.odin("test", dir, "-out:target/tests/" .. package_name)
     end
   end,
 }

@@ -4,19 +4,45 @@ import "base:runtime"
 import "core:os"
 import "core:path/filepath"
 import "core:strings"
+import gitcore "../git"
 import model "../model"
 import tui "../tui"
 
 Tree_Tab :: struct {
-	tree:  model.Tree,
-	theme: model.Icon_Theme,
+	tree:        model.Tree,
+	theme:       model.Icon_Theme,
+	repos:       [dynamic]gitcore.Git_Repo,
+	decorations: gitcore.Decorations,
 }
 
 tree_tab_new :: proc(root: string, theme := model.Icon_Theme.Emoji, allocator := context.allocator) -> ^Tree_Tab {
 	state := new(Tree_Tab, allocator)
 	model.tree_init(&state.tree, root, allocator)
 	state.theme = theme
+	gitcore.decorations_init(&state.decorations, allocator)
+	tree_git_refresh(state)
 	return state
+}
+
+tree_git_refresh :: proc(state: ^Tree_Tab) {
+	gitcore.repos_destroy(&state.repos)
+	gitcore.decorations_destroy(&state.decorations)
+	gitcore.decorations_init(&state.decorations, state.tree.allocator)
+	state.repos = gitcore.discover_all(state.tree.root, allocator = state.tree.allocator)
+	for &repo in state.repos {
+		status, status_message, ok := gitcore.repo_status(&repo, state.tree.allocator)
+		delete(status_message)
+		if !ok do continue
+		ignored, ignored_message, have_ignored := gitcore.repo_ignored(&repo, state.tree.allocator)
+		delete(ignored_message)
+		if have_ignored {
+			gitcore.decorations_add_status(&state.decorations, repo.root, &status, ignored[:])
+			gitcore.ignored_destroy(&ignored)
+		} else {
+			gitcore.decorations_add_status(&state.decorations, repo.root, &status)
+		}
+		gitcore.status_destroy(&status)
+	}
 }
 
 tree_icon_style :: proc(icon: model.Icon) -> tui.Style {
@@ -24,7 +50,37 @@ tree_icon_style :: proc(icon: model.Icon) -> tui.Style {
 	return tui.Style{fg = tui.rgb(icon.r, icon.g, icon.b), bg = tui.DEFAULT_COLOR}
 }
 
-tree_row_node :: proc(state: ^Tree_Tab, row: ^model.Tree_Row, allocator: runtime.Allocator) -> tui.Node {
+status_style :: proc(letter: rune) -> tui.Style {
+	switch letter {
+	case 'M': return tui.Style{fg = tui.rgb(0xe2, 0xc0, 0x8d), bg = tui.DEFAULT_COLOR}
+	case 'U', 'A', 'R', 'C': return tui.Style{fg = tui.rgb(0x73, 0xc9, 0x91), bg = tui.DEFAULT_COLOR}
+	case 'D': return tui.Style{fg = tui.rgb(0xc7, 0x4e, 0x39), bg = tui.DEFAULT_COLOR}
+	case '!': return tui.Style{fg = tui.rgb(0xe4, 0x67, 0x6b), bg = tui.DEFAULT_COLOR}
+	case 'I': return tui.Style{fg = tui.rgb(0x6b, 0x6b, 0x6b), bg = tui.DEFAULT_COLOR, attrs = {.Dim}}
+	}
+	return tui.PLAIN_STYLE
+}
+
+status_text :: proc(letter: rune) -> string {
+	switch letter {
+	case 'M': return "M"
+	case 'U': return "U"
+	case 'A': return "A"
+	case 'R': return "R"
+	case 'C': return "C"
+	case 'D': return "D"
+	case '!': return "!"
+	}
+	return ""
+}
+
+tree_row_node :: proc(
+	state: ^Tree_Tab,
+	row: ^model.Tree_Row,
+	letter: rune,
+	has_status: bool,
+	allocator: runtime.Allocator,
+) -> tui.Node {
 	chevron := " "
 	if row.is_dir {
 		if row.expanded {
@@ -34,14 +90,25 @@ tree_row_node :: proc(state: ^Tree_Tab, row: ^model.Tree_Row, allocator: runtime
 		}
 	}
 	icon := model.file_icon(state.theme, row.name, row.is_dir, row.expanded)
+	name_style := tui.PLAIN_STYLE
+	if has_status && letter == 'I' do name_style = status_style(letter)
+	marker := ""
+	if has_status && letter != 'I' {
+		if row.is_dir {
+			marker = "●"
+		} else {
+			marker = status_text(letter)
+		}
+	}
 	content := tui.row([]tui.Node{
 		tui.transparent(row.depth * 2),
 		tui.text(chevron),
 		tui.text(" "),
 		tui.text(icon.glyph, tree_icon_style(icon)),
 		tui.text(" "),
-		tui.priority(tui.truncate(tui.text(row.name), 0), 0, allocator),
+		tui.priority(tui.truncate(tui.text(row.name, name_style), 0), 0, allocator),
 		tui.spacer(),
+		tui.text(marker, status_style(letter)),
 		tui.transparent(2),
 	}, allocator)
 	return tui.region(content, row.path, []string{"open", "menu"}, allocator = allocator)
@@ -52,6 +119,7 @@ tree_rows_proc :: proc(data: rawptr, allocator: runtime.Allocator) -> [dynamic]R
 	model_rows := model.tree_rows(&state.tree, allocator)
 	rows := make([dynamic]Row, 0, len(model_rows), allocator)
 	for &model_row in model_rows {
+		letter, has_status := gitcore.decorations_letter(&state.decorations, model_row.path, model_row.is_dir)
 		append(&rows, Row{
 			id = model_row.path,
 			path = model_row.path,
@@ -60,7 +128,7 @@ tree_rows_proc :: proc(data: rawptr, allocator: runtime.Allocator) -> [dynamic]R
 			height = 1,
 			is_dir = model_row.is_dir,
 			expanded = model_row.expanded,
-			node = tree_row_node(state, &model_row, allocator),
+			node = tree_row_node(state, &model_row, letter, has_status, allocator),
 		})
 		model_row.path = ""
 	}
@@ -95,6 +163,7 @@ tree_key_proc :: proc(data: rawptr, key: tui.Key, selected: ^Row) -> Tab_Result 
 		return Tab_Result{rows_changed = true, message = "icon theme toggled"}
 	case 'r':
 		model.tree_refresh(&state.tree)
+		tree_git_refresh(state)
 		return Tab_Result{rows_changed = true, message = "tree refreshed"}
 	case 'c':
 		model.tree_collapse_all(&state.tree)
@@ -109,7 +178,10 @@ tree_key_proc :: proc(data: rawptr, key: tui.Key, selected: ^Row) -> Tab_Result 
 
 tree_menu_proc :: proc(data: rawptr, selected: ^Row) -> []model.Menu_Entry {
 	if selected == nil do return nil
-	return model.tree_menu(selected.is_dir, false)
+	repo, message, in_repo := gitcore.owner_of(selected.path)
+	delete(message)
+	if in_repo do gitcore.repo_destroy(&repo)
+	return model.tree_menu(selected.is_dir, in_repo)
 }
 
 tree_action_proc :: proc(data: rawptr, selected: ^Row, action: model.Action, value: string) -> Tab_Result {
@@ -146,15 +218,35 @@ tree_action_proc :: proc(data: rawptr, selected: ^Row, action: model.Action, val
 	case .Copy_Path, .Copy_Relative_Path:
 		return Tab_Result{message = selected.path}
 	case .Stage_Changes:
-		return Tab_Result{message = "not inside a git repository"}
+		repo, message, ok := gitcore.owner_of(selected.path)
+		if !ok {
+			delete(message)
+			return Tab_Result{message = "not inside a git repository"}
+		}
+		defer gitcore.repo_destroy(&repo)
+		delete(message)
+		result, stage_message, staged := gitcore.stage_under(&repo, selected.path)
+		if !staged {
+			delete(stage_message)
+			return Tab_Result{message = "staging failed"}
+		}
+		delete(stage_message)
+		if result.count == 0 && result.skipped_nested > 0 {
+			return Tab_Result{message = "nothing staged; nested repository boundary"}
+		}
+		tree_git_refresh(state)
+		return Tab_Result{rows_changed = true, message = "changes staged"}
 	}
 	model.tree_refresh(&state.tree)
+	tree_git_refresh(state)
 	return Tab_Result{rows_changed = true, message = "tree updated"}
 }
 
 tree_destroy_proc :: proc(data: rawptr) {
 	state := (^Tree_Tab)(data)
 	allocator := state.tree.allocator
+	gitcore.repos_destroy(&state.repos)
+	gitcore.decorations_destroy(&state.decorations)
 	model.tree_destroy(&state.tree)
 	free(state, allocator)
 }
