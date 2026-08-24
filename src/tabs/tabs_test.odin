@@ -165,10 +165,11 @@ test_explorer_row_matches_reference_anatomy :: proc(t: ^testing.T) {
 	defer tui.layout_destroy(&layout)
 	tui.render_node(&buffer, &layout, &rows[0].node, tui.Rect{width = 40, height = 1}, tui.PLAIN_STYLE)
 	arrow, arrow_ok := tui.buffer_get(&buffer, 0, 0)
-	icon, icon_ok := tui.buffer_get(&buffer, 2, 0)
+	icon, icon_ok := tui.buffer_get(&buffer, 4, 0)
 	testing.expect(t, arrow_ok && icon_ok)
 	testing.expect_value(t, arrow.rune, '▸')
 	testing.expect_value(t, icon.rune, '\uf07b')
+	testing.expect_value(t, icon.style.fg, tui.ACCENT)
 }
 
 @(test)

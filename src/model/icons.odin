@@ -26,6 +26,11 @@ Icon_Kind :: enum {
 	Shell,
 	PowerShell,
 	CFamily,
+	CPlusPlus,
+	Header,
+	Zig,
+	Vim,
+	Svg,
 	CSharp,
 	Go,
 	Ruby,
@@ -116,7 +121,11 @@ icon_extension_kind :: proc(ext: string) -> Icon_Kind {
 	case ".xml": return .Xml
 	case ".sh", ".bash", ".zsh", ".fish": return .Shell
 	case ".ps1", ".psm1", ".psd1", ".bat", ".cmd": return .PowerShell
-	case ".c", ".h", ".cpp", ".cc", ".cxx", ".hpp", ".hh": return .CFamily
+	case ".c": return .CFamily
+	case ".cpp", ".cc", ".cxx": return .CPlusPlus
+	case ".h", ".hpp", ".hh": return .Header
+	case ".zig": return .Zig
+	case ".vim", ".nvim": return .Vim
 	case ".cs": return .CSharp
 	case ".go": return .Go
 	case ".rb": return .Ruby
@@ -130,7 +139,8 @@ icon_extension_kind :: proc(ext: string) -> Icon_Kind {
 	case ".txt": return .Text
 	case ".log": return .Log
 	case ".pdf": return .Pdf
-	case ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".svg", ".tiff": return .Image
+	case ".svg": return .Svg
+	case ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".tiff": return .Image
 	case ".mp3", ".wav", ".flac", ".ogg": return .Audio
 	case ".mp4", ".mkv", ".avi", ".mov", ".webm": return .Video
 	case ".zip", ".tar", ".gz", ".tgz", ".bz2", ".xz", ".7z", ".rar": return .Archive
@@ -172,6 +182,11 @@ emoji_icon :: proc(kind: Icon_Kind) -> string {
 	case .Shell: return "🐚"
 	case .PowerShell: return "💻"
 	case .CFamily: return "🔩"
+	case .CPlusPlus: return "🔩"
+	case .Header: return "📘"
+	case .Zig: return "⚡"
+	case .Vim: return "💚"
+	case .Svg: return "🖼"
 	case .CSharp: return "🟣"
 	case .Go: return "🐹"
 	case .Ruby: return "💎"
@@ -211,19 +226,24 @@ material_icon :: proc(kind: Icon_Kind) -> Icon {
 	case .Dir_Open: return Icon{glyph = "\uf07c", r = 0x90, g = 0xa4, b = 0xae, colored = true}
 	case .Rust: return Icon{glyph = "\ue7a8", r = 0xde, g = 0xa5, b = 0x84, colored = true}
 	case .Odin: return Icon{glyph = "\uf0e3", r = 0x70, g = 0x9b, b = 0xe7, colored = true}
-	case .Python: return Icon{glyph = "\ue73c", r = 0x35, g = 0x72, b = 0xa5, colored = true}
-	case .JavaScript: return Icon{glyph = "\ue74e", r = 0xf1, g = 0xe0, b = 0x5a, colored = true}
-	case .TypeScript: return Icon{glyph = "\ue628", r = 0x31, g = 0x78, b = 0xc6, colored = true}
-	case .React: return Icon{glyph = "\ue7ba", r = 0x61, g = 0xda, b = 0xfb, colored = true}
+	case .Python: return Icon{glyph = "\ue73c", r = 0xff, g = 0xbc, b = 0x03, colored = true}
+	case .JavaScript: return Icon{glyph = "\ue74e", r = 0xcb, g = 0xcb, b = 0x41, colored = true}
+	case .TypeScript: return Icon{glyph = "\ue628", r = 0x51, g = 0x9a, b = 0xba, colored = true}
+	case .React: return Icon{glyph = "\ue7ba", r = 0x20, g = 0xc2, b = 0xe3, colored = true}
 	case .Json: return Icon{glyph = "\ue60b", r = 0xcb, g = 0xcb, b = 0x41, colored = true}
-	case .Markdown: return Icon{glyph = "\uf48a", r = 0x51, g = 0x9a, b = 0xba, colored = true}
-	case .Html: return Icon{glyph = "\ue736", r = 0xe3, g = 0x4c, b = 0x26, colored = true}
-	case .Css: return Icon{glyph = "\ue749", r = 0x42, g = 0xa5, b = 0xf5, colored = true}
+	case .Markdown: return Icon{glyph = "\uf48a", r = 0xdd, g = 0xdd, b = 0xdd, colored = true}
+	case .Html: return Icon{glyph = "\ue736", r = 0xe4, g = 0x4d, b = 0x26, colored = true}
+	case .Css: return Icon{glyph = "\ue749", r = 0x66, g = 0x33, b = 0x99, colored = true}
 	case .Config: return Icon{glyph = "\ue615", r = 0x6d, g = 0x80, b = 0x86, colored = true}
 	case .Xml: return Icon{glyph = "\uf121", r = 0xe3, g = 0x79, b = 0x33, colored = true}
-	case .Shell: return Icon{glyph = "\uf489", r = 0x4e, g = 0xaa, b = 0x25, colored = true}
+	case .Shell: return Icon{glyph = "\uf489", r = 0x89, g = 0xe0, b = 0x51, colored = true}
 	case .PowerShell: return Icon{glyph = "\U000f0a0a", r = 0x53, g = 0x91, b = 0xfe, colored = true}
-	case .CFamily: return Icon{glyph = "\ue61d", r = 0xf3, g = 0x4b, b = 0x7d, colored = true}
+	case .CFamily: return Icon{glyph = "\ue61e", r = 0x59, g = 0x9e, b = 0xff, colored = true}
+	case .CPlusPlus: return Icon{glyph = "\ue61d", r = 0x51, g = 0x9a, b = 0xba, colored = true}
+	case .Header: return Icon{glyph = "\uf0fd", r = 0xa0, g = 0x74, b = 0xc4, colored = true}
+	case .Zig: return Icon{glyph = "\ue6a9", r = 0xf6, g = 0x9a, b = 0x1b, colored = true}
+	case .Vim: return Icon{glyph = "\ue62b", r = 0x01, g = 0x98, b = 0x33, colored = true}
+	case .Svg: return Icon{glyph = "\uf1c5", r = 0xff, g = 0xb1, b = 0x3b, colored = true}
 	case .CSharp: return Icon{glyph = "\U000f031b", r = 0x17, g = 0x86, b = 0x00, colored = true}
 	case .Go: return Icon{glyph = "\ue627", r = 0x00, g = 0xad, b = 0xd8, colored = true}
 	case .Ruby: return Icon{glyph = "\ue791", r = 0x70, g = 0x15, b = 0x16, colored = true}
@@ -231,17 +251,17 @@ material_icon :: proc(kind: Icon_Kind) -> Icon {
 	case .Java: return Icon{glyph = "\ue738", r = 0xb0, g = 0x72, b = 0x19, colored = true}
 	case .Kotlin: return Icon{glyph = "\ue634", r = 0xa9, g = 0x7b, b = 0xff, colored = true}
 	case .Swift: return Icon{glyph = "\ue755", r = 0xf0, g = 0x51, b = 0x38, colored = true}
-	case .Lua: return Icon{glyph = "\ue620", r = 0x51, g = 0xa0, b = 0xcf, colored = true}
+	case .Lua: return Icon{glyph = "\ue620", r = 0x00, g = 0xa2, b = 0xff, colored = true}
 	case .Sql: return Icon{glyph = "\ue706", r = 0xf2, g = 0x91, b = 0x11, colored = true}
 	case .Data: return Icon{glyph = "\uf1c3", r = 0x33, g = 0xa8, b = 0x52, colored = true}
-	case .Text: return Icon{glyph = "\uf15c", r = 0x9e, g = 0x9e, b = 0x9e, colored = true}
+	case .Text: return Icon{glyph = "\uf15c", r = 0x89, g = 0xe0, b = 0x51, colored = true}
 	case .Log: return Icon{glyph = "\uf15c", r = 0x75, g = 0x75, b = 0x75, colored = true}
-	case .Pdf: return Icon{glyph = "\uf1c1", r = 0xe5, g = 0x39, b = 0x35, colored = true}
-	case .Image: return Icon{glyph = "\uf1c5", r = 0x26, g = 0xa6, b = 0x9a, colored = true}
+	case .Pdf: return Icon{glyph = "\uf1c1", r = 0xb3, g = 0x0b, b = 0x00, colored = true}
+	case .Image: return Icon{glyph = "\uf1c5", r = 0xa0, g = 0x74, b = 0xc4, colored = true}
 	case .Audio: return Icon{glyph = "\uf1c7", r = 0xec, g = 0x40, b = 0x7a, colored = true}
 	case .Video: return Icon{glyph = "\uf1c8", r = 0xff, g = 0x70, b = 0x43, colored = true}
 	case .Archive: return Icon{glyph = "\uf1c6", r = 0xaf, g = 0xb4, b = 0x2b, colored = true}
-	case .Git: return Icon{glyph = "\ue702", r = 0xf1, g = 0x4e, b = 0x32, colored = true}
+	case .Git: return Icon{glyph = "\ue702", r = 0xf5, g = 0x4d, b = 0x27, colored = true}
 	case .Docker: return Icon{glyph = "\uf308", r = 0x0d, g = 0xb7, b = 0xed, colored = true}
 	case .Lock: return Icon{glyph = "\uf023", r = 0xff, g = 0xd5, b = 0x4f, colored = true}
 	case .Binary: return Icon{glyph = "\uf471", r = 0xef, g = 0x53, b = 0x50, colored = true}

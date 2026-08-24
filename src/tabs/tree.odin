@@ -59,7 +59,33 @@ tree_git_refresh :: proc(state: ^Tree_Tab) {
 
 tree_icon_style :: proc(icon: model.Icon) -> tui.Style {
 	if !icon.colored do return tui.PLAIN_STYLE
-	return tui.Style{fg = tui.rgb(icon.r, icon.g, icon.b), bg = tui.DEFAULT_COLOR}
+	return tui.Style{fg = tui.cube(icon.r, icon.g, icon.b), bg = tui.DEFAULT_COLOR}
+}
+
+// Symbolic git markers rather than status letters, the vocabulary lis used.
+tree_git_glyph :: proc(letter: rune) -> string {
+	switch letter {
+	case 'U': return "✭"
+	case 'M': return "✹"
+	case 'A': return "✚"
+	case 'R', 'C': return "➜"
+	case 'I': return "☒"
+	case '!': return "═"
+	case 'D': return "✖"
+	}
+	return " "
+}
+
+// The indent columns: a pipe wherever an ancestor still has siblings below, then the
+// elbow or tee that joins this row to its parent.
+tree_guides :: proc(row: ^model.Tree_Row, allocator: runtime.Allocator) -> string {
+	if row.depth == 0 do return ""
+	builder := strings.builder_make(allocator)
+	for more in row.ancestors {
+		strings.write_string(&builder, more ? "│ " : "  ")
+	}
+	strings.write_string(&builder, row.is_last ? "└ " : "├ ")
+	return strings.to_string(builder)
 }
 
 status_style :: proc(letter: rune) -> tui.Style {
@@ -97,24 +123,31 @@ tree_row_node :: proc(
 		}
 	}
 	icon := model.file_icon(state.theme, row.name, row.is_dir, row.expanded)
-	name_style := tui.PLAIN_STYLE
-	if has_status do name_style = status_style(letter)
-	marker := ""
-	if has_status && letter != 'I' {
-		if row.is_dir {
-			marker = "●"
-		} else {
-			marker = status_text(letter)
-		}
+	icon_style := tree_icon_style(icon)
+	// A directory takes the accent for both glyph and name and carries a trailing
+	// separator; a file takes its own type colour for both, so icon and name always
+	// agree about what the row is.
+	name_style := icon_style
+	name := row.name
+	if row.is_dir {
+		icon_style = tui.Style{fg = tui.ACCENT}
+		name_style = tui.Style{fg = tui.ACCENT}
+		name = strings.concatenate([]string{row.name, "/"}, allocator)
 	}
+	if has_status && letter == 'I' do name_style = tui.Style{fg = tui.RAMP_FAINT, attrs = {.Dim}}
+	marker := ""
+	if has_status do marker = row.is_dir && letter != 'I' ? "●" : tree_git_glyph(letter)
 	content := tui.row([]tui.Node{
-		tui.transparent(row.depth * 2),
+		tui.text(tree_guides(row, allocator), tui.Style{fg = tui.RAMP_BORDER, attrs = {.Dim}}),
 		tui.text(chevron, tui.Style{attrs = {.Dim}}),
-		tui.text(icon.glyph, tree_icon_style(icon)),
+		// Fixed-width marker field, so the icon column lines up whether or not a row
+		// carries a git status.
+		tui.text(marker == "" ? " " : marker, tui.merge_style(status_style(letter), tui.Style{attrs = {.Bold}})),
 		tui.text(" "),
-		tui.priority(tui.truncate(tui.text(row.name, name_style), 0), 0, allocator),
+		tui.text(icon.glyph, icon_style),
+		tui.text(" "),
+		tui.priority(tui.truncate(tui.text(name, name_style), 0), 0, allocator),
 		tui.spacer(),
-		tui.text(marker, tui.merge_style(status_style(letter), tui.Style{attrs = {.Bold}})),
 		tui.transparent(2),
 	}, allocator)
 	return tui.region(content, row.path, []string{"open", "menu"}, allocator = allocator)
