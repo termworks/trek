@@ -179,12 +179,29 @@ make.recipe{
 local SRC = "src"
 local BIN = "target/" .. NAME
 
+local function packages(pattern)
+  local found = oslo.run{ "find", SRC, "-type", "f", "-name", pattern,
+                          "-printf", "%h\n", capture = true }
+  assert(found.ok, "could not enumerate Odin packages")
+  local dirs = {}
+  local seen = {}
+  for dir in (found.out or ""):gmatch("[^\n]+") do
+    if not seen[dir] then
+      dirs[#dirs + 1] = dir
+      seen[dir] = true
+    end
+  end
+  table.sort(dirs)
+  return dirs
+end
+
 make.recipe{
   name = "build",
   desc = "the binary",
   run = function()
     sh.mkdir("-p", "target")
-    sh.odin("build", SRC, "-out:" .. BIN, "-o:speed")
+    sh.odin("build", SRC, "-out:" .. BIN, "-o:speed", "-extra-linker-flags:-static")
+    assert(linkage(BIN) == "static", BIN .. " is not statically linked")
     report(BIN)
   end,
 }
@@ -215,12 +232,68 @@ make.recipe{
 }
 make.alias("r", "run")
 
-make.recipe{ name = "test", desc = "the suite",
-             run = function() sh.odin("test", SRC) end }
+make.recipe{
+  name = "smoke",
+  desc = "launch in a PTY and wait for delayed input",
+  deps = { "build" },
+  run = function()
+    need("bash", "bash is required for the PTY smoke test")
+    need("script", "script from util-linux is required for the PTY smoke test")
+    local scratch = "/tmp/" .. NAME .. "-smoke"
+    local output = scratch .. "/terminal.log"
+    sh.rm("-rf", scratch)
+    sh.mkdir("-p", scratch .. "/config", scratch .. "/state")
+    local command = ("set -o pipefail; " ..
+      "(sleep 1; printf 2; sleep .2; printf 3; sleep .2; printf 1; " ..
+      "sleep .2; printf s; sleep .2; printf q; sleep .2; printf q) | " ..
+      "env HOME=%q XDG_CONFIG_HOME=%q XDG_STATE_HOME=%q " ..
+      "script -qefc './%s .' /dev/null >%q 2>&1"):format(
+        scratch, scratch .. "/config", scratch .. "/state", BIN, output)
+    assert(oslo.run{ "bash", "-c", command }.ok,
+           "trek exited before delayed terminal input; see " .. output)
+    for _, text in ipairs({ "TREK", "Source Control", "Git Graph", "Settings" }) do
+      assert(oslo.run{ "grep", "-aF", text, output, capture = true }.ok,
+             "trek did not render " .. text .. "; see " .. output)
+    end
+    assert(oslo.run{ "grep", "-aF", "\27[?1049l", output, capture = true }.ok,
+           "trek did not restore the terminal; see " .. output)
+    sh.rm("-rf", scratch)
+  end,
+}
+
+make.recipe{
+  name = "test",
+  desc = "the suite",
+  params = {
+    { "--package", desc = "one package name" },
+    { "--names", desc = "comma-separated Odin test names" },
+    { "--threads", desc = "test runner thread count" },
+  },
+  run = function(a)
+    sh.mkdir("-p", "target/tests")
+    for _, dir in ipairs(packages("*_test.odin")) do
+      local package_name = dir:match("([^/]+)$") or "root"
+      if dir == SRC then package_name = NAME end
+      if not a.package or a.package == package_name then
+        local args = { "test", dir, "-out:target/tests/" .. package_name }
+        if a.names then args[#args + 1] = "-define:ODIN_TEST_NAMES=" .. a.names end
+        if a.threads then args[#args + 1] = "-define:ODIN_TEST_THREADS=" .. a.threads end
+        sh.odin(table.unpack(args))
+      end
+    end
+  end,
+}
 make.alias("t", "test")
 
-make.recipe{ name = "check", desc = "type-check without producing a binary",
-             run = function() sh.odin("check", SRC) end }
+make.recipe{
+  name = "check",
+  desc = "type-check without producing a binary",
+  run = function()
+    for _, dir in ipairs(packages("*.odin")) do
+      sh.odin("check", dir, "-no-entry-point")
+    end
+  end,
+}
 make.alias("vet", "check")
 
 -- odinfmt ships with ols rather than with odin, and ols is not in the dev shell: it does not build
@@ -275,5 +348,5 @@ make.recipe{ name = "uninstall", desc = "take it back out of $PREFIX/bin",
              run = function() sh.rm("-f", PREFIX .. "/bin/" .. NAME) end }
 
 make.recipe{ name = "verify", desc = "the whole local gate",
-             deps = { "fmt-check", "check", "test" } }
+             deps = { "fmt-check", "check", "test", "smoke" } }
 make.alias("v", "verify")
