@@ -1,0 +1,48 @@
+# Written by wing. It records which template generated this project and what each
+# file looked like at the time, so `wing template update` can tell a file you edited
+# from one the template changed. Commit it.
+
+template = "odin"
+name = "trek"
+generated_at = "2026-08-24T12:04:50Z"
+
+[[files]]
+path = ".env.lua"
+hash = "1d6a2213aae52346cc9ff8067a3b694b"
+
+[[files]]
+path = ".github/workflows/release.yml"
+hash = "78c1d43a341b02801549d4bc18ab1862"
+
+[[files]]
+path = ".github/workflows/tests.yml"
+hash = "122fc638ec2375ac593daa09e789b7c8"
+
+[[files]]
+path = ".gitignore"
+hash = "7803691992f3b7cdedb9809a5dd817f4"
+
+[[files]]
+path = ".make.lua"
+hash = "865f83ce8782f9c38fc5d010c06aa225"
+
+[[files]]
+path = "LICENSE"
+hash = "027844bab838e520052bffafa4752f4f"
+
+[[files]]
+path = "README.md"
+hash = "aeb954f7df2c10c7d8fbc01bcc05d923"
+
+[[files]]
+path = "flake.nix"
+hash = "8c7eb963fc66fd3f5bbff2a0b0dfda22"
+
+[[files]]
+path = "src/main.odin"
+hash = "2119eeb665681dd1193776edd35b59fe"
+
+[[files]]
+path = "src/main_test.odin"
+hash = "918e5a3e56923fcff191f113290fbc1b"
+
