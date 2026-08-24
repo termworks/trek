@@ -4,6 +4,7 @@ import "base:runtime"
 import "core:strings"
 import luaconfig "../lua"
 import model "../model"
+import settings "../settings"
 import tabpkg "../tabs"
 import tui "../tui"
 
@@ -21,6 +22,7 @@ Shell :: struct {
 	overlay:    Overlay,
 	config:     ^luaconfig.Engine,
 	menu_entries: [dynamic]model.Menu_Entry,
+	preferences: ^settings.Preferences,
 	allocator:  runtime.Allocator,
 	quit:       bool,
 }
@@ -54,6 +56,61 @@ shell_destroy :: proc(shell: ^Shell) {
 
 shell_set_config :: proc(shell: ^Shell, config: ^luaconfig.Engine) {
 	shell.config = config
+}
+
+shell_set_preferences :: proc(shell: ^Shell, preferences: ^settings.Preferences) {
+	shell.preferences = preferences
+}
+
+shell_tree_tab :: proc(shell: ^Shell) -> ^tabpkg.Tab {
+	for &tab in shell.tabs {
+		if tab.name == "tree" do return &tab
+	}
+	return nil
+}
+
+shell_sync_preferences :: proc(shell: ^Shell) {
+	if shell.preferences == nil do return
+	tab := shell_tree_tab(shell)
+	theme, hidden, git_decorations, root, expanded, ok := tabpkg.tree_state(tab)
+	if !ok do return
+	settings.preferences_set_icons(shell.preferences, model.icon_theme_name(theme))
+	shell.preferences.hidden = hidden
+	shell.preferences.git_decorations = git_decorations
+	settings.preferences_set_expanded(shell.preferences, root, expanded)
+}
+
+shell_save_preferences :: proc(shell: ^Shell) {
+	if shell.preferences == nil do return
+	shell_sync_preferences(shell)
+	_ = settings.preferences_save(shell.preferences)
+}
+
+shell_apply_setting :: proc(shell: ^Shell, setting: Setting_Action) {
+	if shell.preferences == nil do return
+	tab := shell_tree_tab(shell)
+	theme, hidden, git_decorations, _, _, ok := tabpkg.tree_state(tab)
+	if !ok do return
+	switch setting {
+	case .Icons: theme = model.icon_theme_toggle(theme)
+	case .Hidden: hidden = !hidden
+	case .Git_Decorations: git_decorations = !git_decorations
+	case .Start_Tab:
+		active := shell_active_tab(shell)
+		if active != nil do settings.preferences_set_start_tab(shell.preferences, active.name)
+	case .None:
+	}
+	_ = tabpkg.tree_apply_preferences(tab, theme, hidden, git_decorations)
+	shell_sync_preferences(shell)
+	_ = settings.preferences_save(shell.preferences)
+	shell_reload(shell)
+	overlay_settings(
+		&shell.overlay,
+		shell.preferences.icons,
+		shell.preferences.hidden,
+		shell.preferences.git_decorations,
+		shell.preferences.start_tab,
+	)
 }
 
 shell_clear_menu :: proc(shell: ^Shell) {
@@ -243,7 +300,11 @@ shell_apply_result :: proc(shell: ^Shell, result: tabpkg.Tab_Result) {
 			delete(message)
 		}
 	}
-	if result.rows_changed do shell_reload(shell)
+	if result.rows_changed {
+		shell_sync_preferences(shell)
+		if shell.preferences != nil do _ = settings.preferences_save(shell.preferences)
+		shell_reload(shell)
+	}
 	if result.open_menu {
 		shell_open_menu(shell)
 	}
@@ -265,6 +326,7 @@ shell_run_action :: proc(shell: ^Shell, action: model.Action, value := "") {
 	tab := shell_active_tab(shell)
 	row := shell_selected_row(shell)
 	if tab == nil || row == nil do return
+	if action == .Change_Folder do shell_sync_preferences(shell)
 	result := tabpkg.tab_action(tab, row, action, value)
 	shell_apply_result(shell, result)
 }
@@ -273,6 +335,10 @@ shell_overlay_result :: proc(shell: ^Shell, result: Overlay_Result) {
 	if result.dismiss {
 		overlay_close(&shell.overlay)
 		shell_clear_menu(shell)
+		return
+	}
+	if result.setting != .None {
+		shell_apply_setting(shell, result.setting)
 		return
 	}
 	if !result.submit do return
@@ -347,7 +413,15 @@ shell_key :: proc(shell: ^Shell, key: tui.Key, viewport: int) {
 		return
 	}
 	if key.code == .Rune && key.rune == ',' {
-		overlay_settings(&shell.overlay)
+		if shell.preferences != nil {
+			overlay_settings(
+				&shell.overlay,
+				shell.preferences.icons,
+				shell.preferences.hidden,
+				shell.preferences.git_decorations,
+				shell.preferences.start_tab,
+			)
+		}
 		return
 	}
 	tab := shell_active_tab(shell)
@@ -390,9 +464,7 @@ shell_mouse :: proc(shell: ^Shell, mouse: tui.Mouse_Event, width, height: int) {
 	if mouse.action == .Press && index >= 0 && shell.rows[index].selectable {
 		shell.selected = index
 		if mouse.button == 2 {
-			tab := shell_active_tab(shell)
-			entries := tabpkg.tab_menu(tab, shell_selected_row(shell))
-			if len(entries) > 0 do overlay_menu(&shell.overlay, "Actions", entries)
+			shell_open_menu(shell)
 		}
 	}
 }

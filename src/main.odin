@@ -6,6 +6,7 @@ import "core:path/filepath"
 import "core:strings"
 import luaconfig "./lua"
 import model "./model"
+import settings "./settings"
 import tabs "./tabs"
 import tui "./tui"
 import ui "./ui"
@@ -69,13 +70,24 @@ run_suspended :: proc(config: ^luaconfig.Engine, terminal: ^tui.Terminal, buffer
 }
 
 run_tui :: proc(root: string) -> bool {
+	preferences: settings.Preferences
+	settings.preferences_init(&preferences)
+	_ = settings.preferences_load(&preferences)
+	defer settings.preferences_destroy(&preferences)
 	config: luaconfig.Engine
-	if !luaconfig.engine_init(&config, root) || !luaconfig.engine_load_config(&config) {
+	icons := settings.resolved_icons(&preferences)
+	if !luaconfig.engine_init(&config, root) ||
+	   !luaconfig.engine_apply_defaults(&config, icons, preferences.hidden, preferences.git_decorations, preferences.start_tab) ||
+	   !luaconfig.engine_load_config(&config) {
 		fmt.eprintln("trek: ", config.error)
 		luaconfig.engine_destroy(&config)
 		return false
 	}
 	defer luaconfig.engine_destroy(&config)
+	settings.preferences_set_icons(&preferences, config.settings.icons)
+	preferences.hidden = config.settings.hidden
+	preferences.git_decorations = config.settings.git_decorations
+	settings.preferences_set_start_tab(&preferences, config.settings.start_tab)
 	terminal: tui.Terminal
 	if !tui.terminal_enter(&terminal) {
 		fmt.eprintln("trek requires an interactive terminal")
@@ -101,9 +113,13 @@ run_tui :: proc(root: string) -> bool {
 	ui.shell_init(&shell)
 	defer ui.shell_destroy(&shell)
 	ui.shell_set_config(&shell, &config)
+	ui.shell_set_preferences(&shell, &preferences)
+	defer ui.shell_save_preferences(&shell)
 	theme := model.Icon_Theme.Emoji
 	if config.settings.icons == "material" do theme = .Material
-	ui.shell_add_tab(&shell, tabs.tree_tab(root, theme))
+	ui.shell_add_tab(&shell, tabs.tree_tab(root, theme, preferences.hidden, preferences.git_decorations))
+	_ = tabs.tree_restore_expanded(ui.shell_active_tab(&shell), settings.preferences_expanded(&preferences, root))
+	ui.shell_reload(&shell)
 	ui.shell_add_tab(&shell, tabs.changes_tab(root))
 	ui.shell_add_tab(&shell, tabs.graph_tab(root))
 	for &definition in config.tabs do ui.shell_add_tab(&shell, tabs.lua_tab(&config, &definition))

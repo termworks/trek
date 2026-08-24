@@ -13,12 +13,21 @@ Tree_Tab :: struct {
 	theme:       model.Icon_Theme,
 	repos:       [dynamic]gitcore.Git_Repo,
 	decorations: gitcore.Decorations,
+	git_decorations: bool,
 }
 
-tree_tab_new :: proc(root: string, theme := model.Icon_Theme.Emoji, allocator := context.allocator) -> ^Tree_Tab {
+tree_tab_new :: proc(
+	root: string,
+	theme := model.Icon_Theme.Emoji,
+	show_hidden := false,
+	git_decorations := true,
+	allocator := context.allocator,
+) -> ^Tree_Tab {
 	state := new(Tree_Tab, allocator)
 	model.tree_init(&state.tree, root, allocator)
 	state.theme = theme
+	state.tree.show_hidden = show_hidden
+	state.git_decorations = git_decorations
 	gitcore.decorations_init(&state.decorations, allocator)
 	tree_git_refresh(state)
 	return state
@@ -28,6 +37,7 @@ tree_git_refresh :: proc(state: ^Tree_Tab) {
 	gitcore.repos_destroy(&state.repos)
 	gitcore.decorations_destroy(&state.decorations)
 	gitcore.decorations_init(&state.decorations, state.tree.allocator)
+	if !state.git_decorations do return
 	state.repos = gitcore.discover_all(state.tree.root, allocator = state.tree.allocator)
 	for &repo in state.repos {
 		status, status_message, ok := gitcore.repo_status(&repo, state.tree.allocator)
@@ -254,8 +264,14 @@ tree_destroy_proc :: proc(data: rawptr) {
 	free(state, allocator)
 }
 
-tree_tab :: proc(root: string, theme := model.Icon_Theme.Emoji, allocator := context.allocator) -> Tab {
-	state := tree_tab_new(root, theme, allocator)
+tree_tab :: proc(
+	root: string,
+	theme := model.Icon_Theme.Emoji,
+	show_hidden := false,
+	git_decorations := true,
+	allocator := context.allocator,
+) -> Tab {
+	state := tree_tab_new(root, theme, show_hidden, git_decorations, allocator)
 	return Tab{
 		name = "tree",
 		title = "Explorer",
@@ -268,4 +284,29 @@ tree_tab :: proc(root: string, theme := model.Icon_Theme.Emoji, allocator := con
 		action = tree_action_proc,
 		destroy = tree_destroy_proc,
 	}
+}
+
+tree_apply_preferences :: proc(tab: ^Tab, theme: model.Icon_Theme, hidden, git_decorations: bool) -> bool {
+	if tab == nil || tab.name != "tree" do return false
+	state := (^Tree_Tab)(tab.data)
+	state.theme = theme
+	state.tree.show_hidden = hidden
+	if state.git_decorations != git_decorations {
+		state.git_decorations = git_decorations
+		tree_git_refresh(state)
+	}
+	return true
+}
+
+tree_state :: proc(tab: ^Tab) -> (model.Icon_Theme, bool, bool, string, []string, bool) {
+	if tab == nil || tab.name != "tree" do return .Emoji, false, true, "", nil, false
+	state := (^Tree_Tab)(tab.data)
+	return state.theme, state.tree.show_hidden, state.git_decorations, state.tree.root, state.tree.expanded[:], true
+}
+
+tree_restore_expanded :: proc(tab: ^Tab, paths: []string) -> bool {
+	if tab == nil || tab.name != "tree" do return false
+	state := (^Tree_Tab)(tab.data)
+	model.tree_set_expanded(&state.tree, paths)
+	return true
 }

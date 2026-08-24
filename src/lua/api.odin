@@ -90,6 +90,21 @@ engine_read_api :: proc(engine: ^Engine) -> bool {
 	return true
 }
 
+engine_apply_defaults :: proc(engine: ^Engine, icons: string, hidden, git_decorations: bool, start_tab: string) -> bool {
+	L := engine.state
+	if !get_trek(L) do return false
+	push_string(L, icons)
+	clua.setfield(L, -2, "icons")
+	clua.pushboolean(L, b32(hidden))
+	clua.setfield(L, -2, "hidden")
+	clua.pushboolean(L, b32(git_decorations))
+	clua.setfield(L, -2, "git_decorations")
+	push_string(L, start_tab)
+	clua.setfield(L, -2, "start_tab")
+	clua.pop(L, 1)
+	return true
+}
+
 push_context :: proc(engine: ^Engine, tab_name, row_path: string, is_dir: bool) {
 	L := engine.state
 	clua.createtable(L, 0, 10)

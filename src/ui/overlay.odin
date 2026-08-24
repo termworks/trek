@@ -1,6 +1,7 @@
 package ui
 
 import "base:runtime"
+import "core:fmt"
 import "core:unicode/utf8"
 import model "../model"
 import tui "../tui"
@@ -21,6 +22,18 @@ Overlay :: struct {
 	action:   model.Action,
 	input:    [dynamic]byte,
 	allocator: runtime.Allocator,
+	settings_icons: string,
+	settings_hidden: bool,
+	settings_git: bool,
+	settings_start: string,
+}
+
+Setting_Action :: enum {
+	None,
+	Icons,
+	Hidden,
+	Git_Decorations,
+	Start_Tab,
 }
 
 Overlay_Result :: struct {
@@ -29,6 +42,7 @@ Overlay_Result :: struct {
 	action:  model.Action,
 	value:   string,
 	entry_id: string,
+	setting: Setting_Action,
 }
 
 overlay_init :: proc(overlay: ^Overlay, allocator := context.allocator) {
@@ -71,10 +85,14 @@ overlay_confirm :: proc(overlay: ^Overlay, title: string, action: model.Action) 
 	overlay.action = action
 }
 
-overlay_settings :: proc(overlay: ^Overlay) {
+overlay_settings :: proc(overlay: ^Overlay, icons: string, hidden, git_decorations: bool, start_tab: string) {
 	overlay_close(overlay)
 	overlay.kind = .Settings
 	overlay.title = "Settings"
+	overlay.settings_icons = icons
+	overlay.settings_hidden = hidden
+	overlay.settings_git = git_decorations
+	overlay.settings_start = start_tab
 }
 
 overlay_append_rune :: proc(overlay: ^Overlay, value: rune) {
@@ -116,7 +134,20 @@ overlay_key :: proc(overlay: ^Overlay, key: tui.Key) -> Overlay_Result {
 			return Overlay_Result{dismiss = true}
 		}
 	case .Settings:
+		if key.code == .Up do overlay.selected = max(overlay.selected - 1, 0)
+		if key.code == .Down do overlay.selected = min(overlay.selected + 1, 3)
 		if key.code == .Rune && (key.rune == 'q' || key.rune == ',') do return Overlay_Result{dismiss = true}
+		setting := Setting_Action.None
+		if key.code == .Enter || (key.code == .Rune && key.rune == ' ') do setting = Setting_Action(overlay.selected + 1)
+		if key.code == .Rune {
+			switch key.rune {
+			case 'i': setting = .Icons
+			case '.': setting = .Hidden
+			case 'g': setting = .Git_Decorations
+			case 's': setting = .Start_Tab
+			}
+		}
+		if setting != .None do return Overlay_Result{setting = setting}
 	case .None:
 	}
 	return {}
@@ -163,8 +194,21 @@ overlay_render :: proc(overlay: ^Overlay, buffer: ^tui.Buffer) {
 	case .Confirm:
 		tui.buffer_draw_text(buffer, x + 2, y + 1, "y confirm · n cancel", panel, width - 4)
 	case .Settings:
-		lines := [?]string{"i  icon theme", ".  hidden files", "1-9  switch tab", "q  quit"}
-		for line, index in lines do tui.buffer_draw_text(buffer, x + 2, y + index + 1, line, panel, width - 4)
+		lines := [?]string{
+			fmt.aprintf("i  icon theme       %s", overlay.settings_icons),
+			fmt.aprintf(".  hidden files    %s", overlay.settings_hidden ? "on" : "off"),
+			fmt.aprintf("g  git decorations %s", overlay.settings_git ? "on" : "off"),
+			fmt.aprintf("s  start tab       %s", overlay.settings_start),
+		}
+		defer {
+			for line in lines do delete(line)
+		}
+		for line, index in lines {
+			style := panel
+			if index == overlay.selected do style = selected
+			overlay_fill(buffer, tui.Rect{x = x + 1, y = y + index + 1, width = width - 2, height = 1}, style)
+			tui.buffer_draw_text(buffer, x + 2, y + index + 1, line, style, width - 4)
+		}
 	case .None:
 	}
 }

@@ -2,8 +2,11 @@ package ui
 
 import "base:runtime"
 import "core:fmt"
+import "core:os"
+import "core:path/filepath"
 import "core:testing"
 import model "../model"
+import settings "../settings"
 import tabpkg "../tabs"
 import tui "../tui"
 
@@ -100,4 +103,51 @@ test_shell_renders_headless_buffer :: proc(t: ^testing.T) {
 	testing.expect(t, ok)
 	testing.expect_value(t, cell.rune, 'E')
 	testing.expect(t, len(layout.regions) == 0)
+}
+
+@(test)
+test_settings_overlay_updates_and_persists :: proc(t: ^testing.T) {
+	root, err := os.make_directory_temp("", "trek-ui-settings-*", context.allocator)
+	testing.expect(t, err == nil)
+	defer { _ = os.remove_all(root); delete(root) }
+	preferences: settings.Preferences
+	settings.preferences_init(&preferences, root)
+	defer settings.preferences_destroy(&preferences)
+	shell: Shell
+	shell_init(&shell)
+	defer shell_destroy(&shell)
+	shell_set_preferences(&shell, &preferences)
+	shell_add_tab(&shell, tabpkg.tree_tab(root, .Emoji, false, true))
+	shell_key(&shell, tui.Key{code = .Rune, rune = ','}, 8)
+	testing.expect_value(t, shell.overlay.kind, Overlay_Kind.Settings)
+	shell_key(&shell, tui.Key{code = .Enter}, 8)
+	testing.expect_value(t, preferences.icons, "material")
+	_, _, _, _, _, ok := tabpkg.tree_state(shell_tree_tab(&shell))
+	testing.expect(t, ok)
+	info, stat_error := os.stat(preferences.path, context.allocator)
+	testing.expect(t, stat_error == nil)
+	if stat_error == nil do os.file_info_delete(info, context.allocator)
+}
+
+@(test)
+test_tree_expansion_is_persisted :: proc(t: ^testing.T) {
+	root, err := os.make_directory_temp("", "trek-ui-tree-*", context.allocator)
+	testing.expect(t, err == nil)
+	defer { _ = os.remove_all(root); delete(root) }
+	dir, _ := filepath.join([]string{root, "src"}, context.allocator)
+	defer delete(dir)
+	_ = os.make_directory(dir)
+	preferences: settings.Preferences
+	settings.preferences_init(&preferences, root)
+	defer settings.preferences_destroy(&preferences)
+	shell: Shell
+	shell_init(&shell)
+	defer shell_destroy(&shell)
+	shell_set_preferences(&shell, &preferences)
+	shell_add_tab(&shell, tabpkg.tree_tab(root))
+	shell_select_delta(&shell, 1, 8)
+	shell_key(&shell, tui.Key{code = .Enter}, 8)
+	paths := settings.preferences_expanded(&preferences, root)
+	testing.expect_value(t, len(paths), 1)
+	if len(paths) == 1 do testing.expect_value(t, paths[0], dir)
 }
