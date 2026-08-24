@@ -67,7 +67,9 @@ Tab_Result :: struct {
 	select_first: bool,
 }
 
-Rows_Proc :: proc(data: rawptr, allocator: runtime.Allocator) -> [dynamic]Row
+// `width` is the content width the rows will be drawn into. A provider that wraps
+// text needs it at build time, because a Row's height is fixed once it is built.
+Rows_Proc :: proc(data: rawptr, width: int, allocator: runtime.Allocator) -> [dynamic]Row
 Key_Proc :: proc(data: rawptr, key: tui.Key, selected: ^Row) -> Tab_Result
 Select_Proc :: proc(data: rawptr, selected: ^Row) -> Tab_Result
 Menu_Proc :: proc(data: rawptr, selected: ^Row) -> []model.Menu_Entry
@@ -99,9 +101,9 @@ Tab :: struct {
 	visible:   Visible_Proc,
 }
 
-tab_rows :: proc(tab: ^Tab, allocator := context.allocator) -> [dynamic]Row {
+tab_rows :: proc(tab: ^Tab, width: int, allocator := context.allocator) -> [dynamic]Row {
 	if tab.rows == nil do return make([dynamic]Row, allocator)
-	return tab.rows(tab.data, allocator)
+	return tab.rows(tab.data, width, allocator)
 }
 
 tab_key :: proc(tab: ^Tab, key: tui.Key, selected: ^Row) -> Tab_Result {

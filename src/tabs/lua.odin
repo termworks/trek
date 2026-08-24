@@ -13,7 +13,7 @@ Lua_Tab :: struct {
 	visible:   bool,
 }
 
-lua_rows_proc :: proc(data: rawptr, allocator: runtime.Allocator) -> [dynamic]Row {
+lua_rows_proc :: proc(data: rawptr, width: int, allocator: runtime.Allocator) -> [dynamic]Row {
 	state := (^Lua_Tab)(data)
 	nodes, message := luaconfig.engine_tab_rows(state.engine, state.name, allocator)
 	rows := make([dynamic]Row, allocator)

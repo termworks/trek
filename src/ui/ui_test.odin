@@ -10,7 +10,7 @@ import settings "../settings"
 import tabpkg "../tabs"
 import tui "../tui"
 
-fake_rows :: proc(data: rawptr, allocator: runtime.Allocator) -> [dynamic]tabpkg.Row {
+fake_rows :: proc(data: rawptr, width: int, allocator: runtime.Allocator) -> [dynamic]tabpkg.Row {
 	rows := make([dynamic]tabpkg.Row, allocator)
 	for index in 0 ..< 12 {
 		id := fmt.aprintf("row-%d", index, allocator = allocator)

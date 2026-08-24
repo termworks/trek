@@ -48,7 +48,7 @@ test_changes_rows_have_three_sections_and_commit_box :: proc(t: ^testing.T) {
 	_ = os.write_entire_file_from_string(new_file, "new")
 	state := changes_new(root)
 	defer changes_destroy_proc(rawptr(state))
-	rows := changes_rows_proc(rawptr(state), context.allocator)
+	rows := changes_rows_proc(rawptr(state), 80, context.allocator)
 	defer rows_destroy(&rows)
 	commit_boxes := 0
 	commit_buttons := 0
@@ -156,7 +156,7 @@ test_graph_rows_render_commits_and_refs :: proc(t: ^testing.T) {
 	defer { _ = os.remove_all(root); delete(root) }
 	state := graph_new(root)
 	defer graph_destroy_proc(rawptr(state))
-	rows := graph_rows_proc(rawptr(state), context.allocator)
+	rows := graph_rows_proc(rawptr(state), 80, context.allocator)
 	defer rows_destroy(&rows)
 	commits := 0
 	for &row in rows {
@@ -178,7 +178,7 @@ test_explorer_row_matches_reference_anatomy :: proc(t: ^testing.T) {
 	_ = os.make_directory(dir)
 	state := tree_tab_new(root)
 	defer tree_destroy_proc(rawptr(state))
-	rows := tree_rows_proc(rawptr(state), context.allocator)
+	rows := tree_rows_proc(rawptr(state), 80, context.allocator)
 	defer rows_destroy(&rows)
 	testing.expect(t, len(rows) == 1)
 	buffer: tui.Buffer
@@ -203,7 +203,7 @@ test_source_control_rows_match_reference_shapes :: proc(t: ^testing.T) {
 	defer { _ = os.remove_all(root); delete(root) }
 	state := changes_new(root)
 	defer changes_destroy_proc(rawptr(state))
-	rows := changes_rows_proc(rawptr(state), context.allocator)
+	rows := changes_rows_proc(rawptr(state), 80, context.allocator)
 	defer rows_destroy(&rows)
 	box: ^Row
 	button: ^Row
@@ -238,7 +238,7 @@ test_source_control_rows_match_reference_shapes :: proc(t: ^testing.T) {
 	delete(output)
 	testing.expect(t, ok)
 	changes_refresh(state)
-	live := changes_rows_proc(rawptr(state), context.allocator)
+	live := changes_rows_proc(rawptr(state), 80, context.allocator)
 	defer rows_destroy(&live)
 	for &row in live {
 		if row.kind != .Commit_Button do continue
@@ -255,17 +255,17 @@ test_graph_lane_survives_narrow_metadata :: proc(t: ^testing.T) {
 	defer { _ = os.remove_all(root); delete(root) }
 	state := graph_new(root)
 	defer graph_destroy_proc(rawptr(state))
-	rows := graph_rows_proc(rawptr(state), context.allocator)
+	rows := graph_rows_proc(rawptr(state), 80, context.allocator)
 	defer rows_destroy(&rows)
 	testing.expect(t, len(rows) > 0)
 	if len(rows) == 0 do return
 	buffer: tui.Buffer
-	tui.buffer_init(&buffer, 24, 1)
+	tui.buffer_init(&buffer, 24, max(rows[0].height, 1))
 	defer tui.buffer_destroy(&buffer)
 	layout: tui.Layout
 	tui.layout_init(&layout)
 	defer tui.layout_destroy(&layout)
-	tui.render_node(&buffer, &layout, &rows[0].node, tui.Rect{width = 24, height = 1}, tui.PLAIN_STYLE)
+	tui.render_node(&buffer, &layout, &rows[0].node, tui.Rect{width = 24, height = max(rows[0].height, 1)}, tui.PLAIN_STYLE)
 	cell, ok := tui.buffer_get(&buffer, 1, 0)
 	testing.expect(t, ok)
 	testing.expect_value(t, cell.rune, '●')
@@ -300,19 +300,19 @@ test_rows_never_alias_id_and_path :: proc(t: ^testing.T) {
 
 	tree := tree_tab_new(root)
 	defer tree_destroy_proc(rawptr(tree))
-	tree_rows := tree_rows_proc(rawptr(tree), context.allocator)
+	tree_rows := tree_rows_proc(rawptr(tree), 80, context.allocator)
 	defer rows_destroy(&tree_rows)
 	expect_distinct_strings(t, tree_rows[:], "tree")
 
 	changes := changes_new(root)
 	defer changes_destroy_proc(rawptr(changes))
-	changes_rows := changes_rows_proc(rawptr(changes), context.allocator)
+	changes_rows := changes_rows_proc(rawptr(changes), 80, context.allocator)
 	defer rows_destroy(&changes_rows)
 	expect_distinct_strings(t, changes_rows[:], "changes")
 
 	graph := graph_new(root)
 	defer graph_destroy_proc(rawptr(graph))
-	graph_rows := graph_rows_proc(rawptr(graph), context.allocator)
+	graph_rows := graph_rows_proc(rawptr(graph), 80, context.allocator)
 	defer rows_destroy(&graph_rows)
 	expect_distinct_strings(t, graph_rows[:], "graph")
 }
@@ -356,7 +356,7 @@ test_explorer_mode_walks_into_directories :: proc(t: ^testing.T) {
 
 	state := tree_tab_new(root, false, true)
 	defer tree_destroy_proc(rawptr(state))
-	rows := tree_rows_proc(rawptr(state), context.allocator)
+	rows := tree_rows_proc(rawptr(state), 80, context.allocator)
 	testing.expect_value(t, len(rows), 1)
 	src_row := rows[0]
 	testing.expect(t, src_row.is_dir)
@@ -366,7 +366,7 @@ test_explorer_mode_walks_into_directories :: proc(t: ^testing.T) {
 	rows_destroy(&rows)
 	testing.expect(t, result.rows_changed)
 	testing.expect_value(t, result.root_path, nested)
-	inner := tree_rows_proc(rawptr(state), context.allocator)
+	inner := tree_rows_proc(rawptr(state), 80, context.allocator)
 	testing.expect_value(t, len(inner), 1)
 	rows_destroy(&inner)
 
@@ -389,16 +389,16 @@ test_explorer_mode_toggle_clears_expansion :: proc(t: ^testing.T) {
 
 	state := tree_tab_new(root)
 	defer tree_destroy_proc(rawptr(state))
-	rows := tree_rows_proc(rawptr(state), context.allocator)
+	rows := tree_rows_proc(rawptr(state), 80, context.allocator)
 	_ = tree_select_proc(rawptr(state), &rows[0])
 	rows_destroy(&rows)
-	expanded := tree_rows_proc(rawptr(state), context.allocator)
+	expanded := tree_rows_proc(rawptr(state), 80, context.allocator)
 	testing.expect_value(t, len(expanded), 2)
 	rows_destroy(&expanded)
 
 	result := tree_key_proc(rawptr(state), tui.Key{code = .Rune, rune = 'a'}, nil)
 	testing.expect_value(t, result.message, "explorer mode")
-	flat := tree_rows_proc(rawptr(state), context.allocator)
+	flat := tree_rows_proc(rawptr(state), 80, context.allocator)
 	testing.expect_value(t, len(flat), 1)
 	rows_destroy(&flat)
 }

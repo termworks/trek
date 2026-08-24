@@ -71,7 +71,7 @@ tree_row_node :: proc(state: ^Tree_Tab, row: ^model.Tree_Row, allocator: runtime
 	return tui.region(content, row.path, []string{"open", "menu"}, allocator = allocator)
 }
 
-tree_rows_proc :: proc(data: rawptr, allocator: runtime.Allocator) -> [dynamic]Row {
+tree_rows_proc :: proc(data: rawptr, width: int, allocator: runtime.Allocator) -> [dynamic]Row {
 	state := (^Tree_Tab)(data)
 	model_rows := model.tree_rows(&state.tree, allocator)
 	rows := make([dynamic]Row, 0, len(model_rows), allocator)

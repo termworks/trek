@@ -1,5 +1,6 @@
 package tui
 
+import "base:runtime"
 import "core:strings"
 import "core:unicode/utf8"
 
@@ -173,4 +174,52 @@ first_rune_text :: proc(value: string) -> string {
 		}
 	}
 	return value
+}
+
+
+// Greedy word wrap, the way `git log --format=%w` reflows a paragraph: break at
+// spaces, and hard-break a single word that is wider than the line so nothing is
+// lost off the right edge. The existing wrap_text breaks per grapheme, which is
+// right for preformatted text and wrong for prose.
+wrap_words :: proc(value: string, width: int, allocator := context.allocator) -> [dynamic]string {
+	lines := make([dynamic]string, allocator)
+	if width <= 0 {
+		append(&lines, strings.clone("", allocator))
+		return lines
+	}
+	current := strings.builder_make(context.temp_allocator)
+	used := 0
+	remaining := value
+	for word in strings.split_iterator(&remaining, " ") {
+		if word == "" do continue
+		word_width := text_width(word)
+		if used > 0 && used + 1 + word_width > width {
+			append(&lines, strings.clone(strings.to_string(current), allocator))
+			strings.builder_reset(&current)
+			used = 0
+		}
+		if used > 0 {
+			strings.write_string(&current, " ")
+			used += 1
+		}
+		if word_width > width {
+			for r in word {
+				rune_width := text_width(utf8.runes_to_string({r}, context.temp_allocator))
+				if used + rune_width > width && used > 0 {
+					append(&lines, strings.clone(strings.to_string(current), allocator))
+					strings.builder_reset(&current)
+					used = 0
+				}
+				strings.write_rune(&current, r)
+				used += rune_width
+			}
+			continue
+		}
+		strings.write_string(&current, word)
+		used += word_width
+	}
+	if used > 0 || len(lines) == 0 {
+		append(&lines, strings.clone(strings.to_string(current), allocator))
+	}
+	return lines
 }

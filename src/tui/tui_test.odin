@@ -259,3 +259,39 @@ test_atomic_nodes_drop_whole :: proc(t: ^testing.T) {
 	// The date does not fit alongside KEEP, so it is gone rather than clipped.
 	testing.expect_value(t, text_line, "KEEP")
 }
+
+// Word wrap, the way git reflows a paragraph: break at spaces, and hard-break only a
+// word that cannot fit on a line of its own.
+@(test)
+test_wrap_words_breaks_at_spaces :: proc(t: ^testing.T) {
+	lines := wrap_words("the quick brown fox jumps", 10)
+	defer destroy_lines(&lines)
+	testing.expect_value(t, len(lines), 3)
+	testing.expect_value(t, lines[0], "the quick")
+	testing.expect_value(t, lines[1], "brown fox")
+	testing.expect_value(t, lines[2], "jumps")
+	for line in lines do testing.expect(t, text_width(line) <= 10)
+}
+
+@(test)
+test_wrap_words_hard_breaks_long_words :: proc(t: ^testing.T) {
+	lines := wrap_words("a supercalifragilistic word", 8)
+	defer destroy_lines(&lines)
+	for line in lines do testing.expectf(t, text_width(line) <= 8, "overflowed: %q", line)
+	joined := make([dynamic]byte)
+	defer delete(joined)
+	for line in lines do append(&joined, ..transmute([]byte)line)
+	// Nothing is dropped, only redistributed.
+	testing.expect(t, strings.contains(string(joined[:]), "supercalifragilistic"))
+}
+
+@(test)
+test_wrap_words_handles_degenerate_widths :: proc(t: ^testing.T) {
+	zero := wrap_words("anything", 0)
+	defer destroy_lines(&zero)
+	testing.expect_value(t, len(zero), 1)
+
+	empty := wrap_words("", 10)
+	defer destroy_lines(&empty)
+	testing.expect_value(t, len(empty), 1)
+}

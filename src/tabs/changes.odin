@@ -169,7 +169,7 @@ changes_append_section :: proc(
 	}
 }
 
-changes_rows_proc :: proc(data: rawptr, allocator: runtime.Allocator) -> [dynamic]Row {
+changes_rows_proc :: proc(data: rawptr, width: int, allocator: runtime.Allocator) -> [dynamic]Row {
 	state := (^Changes_Tab)(data)
 	rows := make([dynamic]Row, allocator)
 	if !state.has_repo {

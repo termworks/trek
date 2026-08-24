@@ -161,57 +161,78 @@ graph_ref_style :: proc(ref: string) -> tui.Style {
 	return tui.Style{fg = tui.indexed_color(2), attrs = {.Bold}}
 }
 
-// One commit, laid out the way `git tree` lays it out: an identity line carrying
-// hash, date, age, author and refs, the subject on its own line beneath it, and a
-// blank line separating entries. The lane glyphs repeat down all three rows so the
-// graph stays continuous.
-graph_commit_node :: proc(state: ^Graph_Tab, row: ^gitcore.Graph_Row, allocator: runtime.Allocator) -> tui.Node {
+// One commit, laid out the way `git tree` lays it out. `%w(80,0,0)` reflows the
+// whole entry as a single paragraph, so hash, date, age, author, refs and subject
+// run together and break wherever the width falls — which is why a ref can end a
+// line and its branch begin the next. The lane glyphs repeat down every wrapped
+// row, and a blank line closes the entry.
+graph_commit_node :: proc(state: ^Graph_Tab, row: ^gitcore.Graph_Row, width: int, allocator: runtime.Allocator) -> tui.Node {
 	commit := &state.history.commits[row.commit_index]
-	short_hash := commit.hash[:min(7, len(commit.hash))]
+	segments := graph_entry_text(state, row, context.temp_allocator)
 
-	head := make([dynamic]tui.Node, allocator)
-	defer delete(head)
-	append(&head, tui.priority(tui.transparent(1), 100))
-	graph_lane_nodes(&head, row.cells[:])
-	append(&head, tui.priority(tui.text(short_hash, tui.Style{fg = GRAPH_HASH, attrs = {.Bold}}), 90))
-	if commit.date != "" {
-		dated := fmt.aprintf(" %s", commit.date, allocator = allocator)
-		append(&head, tui.optional(graph_owned_text(dated, tui.Style{fg = GRAPH_DATE}), 20, allocator))
+	lane_width := len(row.cells) * 2 + 1
+	wrapped := tui.wrap_words(segments, max(width - lane_width - 1, 8), context.temp_allocator)
+
+	rows := make([dynamic]tui.Node, allocator)
+	defer delete(rows)
+	for line, index in wrapped {
+		children := make([dynamic]tui.Node, allocator)
+		defer delete(children)
+		append(&children, tui.priority(tui.transparent(1), 100, allocator))
+		if index == 0 {
+			graph_lane_nodes(&children, row.cells[:])
+		} else {
+			graph_continuation_nodes(&children, row.cells[:], row.lane)
+		}
+		append(&children, tui.owned_text(strings.clone(line, allocator), graph_entry_style(index)))
+		append(&children, tui.spacer())
+		append(&rows, tui.row(children[:], allocator))
 	}
-	relative := graph_relative_time(commit.timestamp, allocator)
-	age := fmt.aprintf(" (%s)", relative, allocator = allocator)
-	delete(relative)
-	append(&head, tui.optional(graph_owned_text(age, tui.Style{fg = GRAPH_AGE}), 60, allocator))
-	author := fmt.aprintf(" %s", commit.author, allocator = allocator)
-	append(&head, tui.optional(graph_owned_text(author, tui.Style{fg = GRAPH_AUTHOR}), 40, allocator))
-	for ref in commit.refs {
-		append(&head, tui.priority(tui.text(" "), 80))
-		append(&head, tui.priority(tui.text(ref, graph_ref_style(ref)), 80))
-	}
-	append(&head, tui.spacer())
-	append(&head, tui.priority(tui.transparent(1), 100))
-
-	// The subject line reuses the lanes with the commit marker replaced, so a merge
-	// still shows every open lane beside its message.
-	body := make([dynamic]tui.Node, allocator)
-	defer delete(body)
-	append(&body, tui.priority(tui.transparent(1), 100))
-	graph_continuation_nodes(&body, row.cells[:], row.lane)
-	append(&body, tui.priority(tui.truncate(tui.text(commit.subject, tui.Style{fg = GRAPH_SUBJECT, attrs = {.Bold}}), 0), 0, allocator))
-	append(&body, tui.spacer())
-	append(&body, tui.priority(tui.transparent(1), 100))
-
 	gap := make([dynamic]tui.Node, allocator)
 	defer delete(gap)
-	append(&gap, tui.priority(tui.transparent(1), 100))
+	append(&gap, tui.priority(tui.transparent(1), 100, allocator))
 	graph_continuation_nodes(&gap, row.cells[:], row.lane)
 	append(&gap, tui.spacer())
+	append(&rows, tui.row(gap[:], allocator))
+	return tui.column(rows[:], allocator)
+}
 
-	return tui.column([]tui.Node{
-		tui.row(head[:], allocator),
-		tui.row(body[:], allocator),
-		tui.row(gap[:], allocator),
-	}, allocator)
+// The first wrapped line carries the identity; the rest are the message flowing on.
+graph_entry_style :: proc(index: int) -> tui.Style {
+	if index == 0 do return tui.Style{fg = GRAPH_DATE}
+	return tui.Style{fg = GRAPH_SUBJECT, attrs = {.Bold}}
+}
+
+// The whole entry as one flowable string, in git tree's field order.
+graph_entry_text :: proc(state: ^Graph_Tab, row: ^gitcore.Graph_Row, allocator: runtime.Allocator) -> string {
+	commit := &state.history.commits[row.commit_index]
+	short_hash := commit.hash[:min(7, len(commit.hash))]
+	relative := graph_relative_time(commit.timestamp, context.temp_allocator)
+	builder := strings.builder_make(context.temp_allocator)
+	strings.write_string(&builder, short_hash)
+	if commit.date != "" {
+		strings.write_string(&builder, " ")
+		strings.write_string(&builder, commit.date)
+	}
+	strings.write_string(&builder, " (")
+	strings.write_string(&builder, relative)
+	strings.write_string(&builder, ") ")
+	strings.write_string(&builder, commit.author)
+	for ref in commit.refs {
+		strings.write_string(&builder, " ")
+		strings.write_string(&builder, ref)
+	}
+	strings.write_string(&builder, " ")
+	strings.write_string(&builder, commit.subject)
+	return strings.clone(strings.to_string(builder), allocator)
+}
+
+// How many terminal rows this entry needs, so the Row height matches what is drawn.
+graph_commit_height :: proc(state: ^Graph_Tab, row: ^gitcore.Graph_Row, width: int) -> int {
+	segments := graph_entry_text(state, row, context.temp_allocator)
+	lane_width := len(row.cells) * 2 + 1
+	wrapped := tui.wrap_words(segments, max(width - lane_width - 1, 8), context.temp_allocator)
+	return len(wrapped) + 1
 }
 
 // The lane row drawn under a commit: the commit's own marker becomes a vertical,
@@ -233,7 +254,7 @@ graph_connector_node :: proc(row: ^gitcore.Graph_Row, allocator: runtime.Allocat
 	return tui.row(children[:], allocator)
 }
 
-graph_rows_proc :: proc(data: rawptr, allocator: runtime.Allocator) -> [dynamic]Row {
+graph_rows_proc :: proc(data: rawptr, width: int, allocator: runtime.Allocator) -> [dynamic]Row {
 	state := (^Graph_Tab)(data)
 	rows := make([dynamic]Row, allocator)
 	if state.message != "" {
@@ -263,10 +284,10 @@ graph_rows_proc :: proc(data: rawptr, allocator: runtime.Allocator) -> [dynamic]
 			id = id,
 			path = strings.clone(id, allocator),
 			selectable = true,
-			height = 3,
+			height = graph_commit_height(state, &graph_row, width),
 			kind = .Graph_Commit,
 			entry_index = graph_row.commit_index,
-			node = graph_commit_node(state, &graph_row, allocator),
+			node = graph_commit_node(state, &graph_row, width, allocator),
 		})
 	}
 	return rows

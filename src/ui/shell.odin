@@ -27,6 +27,8 @@ Shell :: struct {
 	scroll:     int,
 	hover:      int,
 	hover_tab:  int,
+	// Content width from the last render, so a reload can build rows that wrap.
+	content_width: int,
 	snap:       bool,
 	footer:     string,
 	overlay:    Overlay,
@@ -182,7 +184,7 @@ shell_reload :: proc(shell: ^Shell) {
 		shell.selected = -1
 		return
 	}
-	shell.rows = tabpkg.tab_rows(tab, shell.allocator)
+	shell.rows = tabpkg.tab_rows(tab, shell.content_width, shell.allocator)
 	shell.selected = -1
 	if selected_id != "" {
 		for row, index in shell.rows {
@@ -667,6 +669,12 @@ shell_render :: proc(shell: ^Shell, buffer: ^tui.Buffer, layout: ^tui.Layout) {
 	shell_draw_header(shell, buffer, tab)
 	content_x := ACTIVITY_WIDTH + CONTENT_GUTTER
 	content_width := buffer.width - ACTIVITY_WIDTH - CONTENT_GUTTER
+	// Rows are built for a width; if it changed, they must be rebuilt before they are
+	// measured or drawn, or a wrapped row reports a stale height.
+	if content_width != shell.content_width {
+		shell.content_width = content_width
+		shell_reload(shell)
+	}
 	body_top := HEADER_HEIGHT
 	footer_y := buffer.height - FOOTER_HEIGHT
 	viewport := shell_viewport_height(buffer.height)

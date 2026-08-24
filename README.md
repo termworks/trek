@@ -146,7 +146,8 @@ tab lists NEW, MODIFIED, and STAGED files; `Enter` moves a file between
 unstaged and staged, and the commit box commits what is staged. The Graph tab
 renders all local refs with bounded, colour-stable commit lanes, laid out like
 `git log --graph --all` with a `git tree`-style entry: hash, date, age, author and
-refs on one line, the subject beneath it, and a blank line between commits. The age
+refs and subject reflowed as one paragraph at the pane width, exactly as `%w(80,0,0)`
+does, and a blank line between commits. The age
 reproduces git's own `%ar` wording, including its 90-minute and 36-hour thresholds.
 ## Configuration
 
