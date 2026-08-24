@@ -14,6 +14,7 @@ Graph_Tab :: struct {
 	history:   gitcore.History,
 	graph:     gitcore.Graph,
 	message:   string,
+	has_repo:  bool,
 	allocator: runtime.Allocator,
 }
 
@@ -23,6 +24,7 @@ graph_clear :: proc(state: ^Graph_Tab) {
 	gitcore.repo_destroy(&state.repo)
 	delete(state.message)
 	state.message = ""
+	state.has_repo = false
 }
 
 graph_refresh :: proc(state: ^Graph_Tab) {
@@ -37,6 +39,7 @@ graph_refresh :: proc(state: ^Graph_Tab) {
 		return
 	}
 	state.repo = repo
+	state.has_repo = true
 	history, history_message, history_ok := gitcore.repo_history(&state.repo, state.allocator)
 	delete(history_message)
 	if !history_ok {
@@ -244,5 +247,12 @@ graph_tab :: proc(root: string, allocator := context.allocator) -> Tab {
 		on_focus = graph_focus_proc,
 		on_root = graph_root_proc,
 		heading = graph_heading_proc,
+		visible = graph_visible_proc,
 	}
+}
+
+// The graph is meaningless outside a repository, so it leaves the activity bar
+// entirely rather than showing an empty pane with an explanation in it.
+graph_visible_proc :: proc(data: rawptr) -> bool {
+	return (^Graph_Tab)(data).has_repo
 }

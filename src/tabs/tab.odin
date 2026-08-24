@@ -50,7 +50,11 @@ Tab_Result :: struct {
 	rows_changed: bool,
 	open_menu:    bool,
 	quit:         bool,
+	// Usually a literal. A tab that computed the string sets owns_message, and the
+	// shell frees it after copying it into the footer; without that flag every
+	// computed message leaks, because the shell always clones what it is given.
 	message:      string,
+	owns_message: bool,
 	open_path:    string,
 	root_path:    string,
 	switch_tab:   string,
@@ -66,6 +70,9 @@ Focus_Proc :: proc(data: rawptr) -> Tab_Result
 Paste_Proc :: proc(data: rawptr, value: string, selected: ^Row) -> Tab_Result
 Root_Proc :: proc(data: rawptr, root: string) -> Tab_Result
 Heading_Proc :: proc(data: rawptr) -> Tab_Heading
+// Whether the tab belongs in the activity bar right now. Called every frame, so it
+// must only read state the tab already computed, never spawn a process.
+Visible_Proc :: proc(data: rawptr) -> bool
 
 Tab :: struct {
 	name:      string,
@@ -82,6 +89,7 @@ Tab :: struct {
 	on_paste:  Paste_Proc,
 	on_root:   Root_Proc,
 	heading:   Heading_Proc,
+	visible:   Visible_Proc,
 }
 
 tab_rows :: proc(tab: ^Tab, allocator := context.allocator) -> [dynamic]Row {
@@ -134,3 +142,10 @@ tab_heading :: proc(tab: ^Tab) -> Tab_Heading {
 	return tab.heading(tab.data)
 }
 
+
+// A tab with no predicate is always shown.
+tab_visible :: proc(tab: ^Tab) -> bool {
+	if tab == nil do return false
+	if tab.visible == nil do return true
+	return tab.visible(tab.data)
+}

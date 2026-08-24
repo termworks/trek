@@ -158,6 +158,25 @@ Lua tabs use the same `text`, `row`, `column`, `pad`, `truncate`, `style`,
 and a one MiB output limit; it never blocks a redraw. Lua can add tabs, keys,
 menus, and event handlers, but cannot replace a built-in row provider.
 
+A tab can decide whether it belongs in the activity bar at all. `when` is called
+when the root changes — not per frame — so it may do real work, and a tab
+without one is always shown:
+
+```lua
+trek.tab("cargo", {
+  icon = "C",
+  title = "Cargo",
+  when = function(ctx) return ctx.exec({"test", "-f", ctx.root .. "/Cargo.toml"}) ~= nil end,
+  rows = function(ctx) return { trek.text("  crate") } end,
+})
+```
+
+The built-in Changes and Graph tabs use the same mechanism: both disappear the
+moment you walk out of a repository and come back when you walk into one. A
+hidden tab holds no slot, so the number keys always address what is on screen,
+and it cannot be reached by `Tab`, by number, or by name. If the tab you are
+looking at disappears, trek falls back to the first one still in the bar.
+
 ## State
 
 Preferences and expanded directories are stored in

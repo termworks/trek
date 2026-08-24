@@ -151,6 +151,9 @@ shell_change_root :: proc(shell: ^Shell, root: string) {
 		if tab.name == "tree" do continue
 		_ = tabpkg.tab_root(&tab, root)
 	}
+	// Re-rooting is what makes a tab appear or disappear, so this is the moment to
+	// check whether the tab being shown still belongs in the bar.
+	shell_ensure_visible_active(shell)
 }
 
 shell_add_tab :: proc(shell: ^Shell, tab: tabpkg.Tab) {
@@ -194,6 +197,8 @@ shell_reload :: proc(shell: ^Shell) {
 
 shell_switch_tab :: proc(shell: ^Shell, index: int) {
 	if index < 0 || index >= len(shell.tabs) || index == shell.active do return
+	// A hidden tab is not reachable by any route, including a Lua request by name.
+	if !tabpkg.tab_visible(&shell.tabs[index]) do return
 	shell.active = index
 	shell.selected = -1
 	shell.scroll = 0
@@ -275,6 +280,8 @@ shell_wheel :: proc(shell: ^Shell, delta, viewport: int) {
 }
 
 shell_apply_result :: proc(shell: ^Shell, result: tabpkg.Tab_Result) {
+	// The tab handed ownership over; the footer keeps its own copy.
+	defer if result.owns_message do delete(result.message)
 	if result.message != "" do shell_set_footer(shell, result.message)
 	if shell.config != nil && result.open_path != "" {
 		message := luaconfig.engine_emit(shell.config, "open", result.open_path)
@@ -395,11 +402,20 @@ shell_key :: proc(shell: ^Shell, key: tui.Key, viewport: int) {
 		return
 	}
 	if key.code == .Tab {
-		shell_switch_tab(shell, (shell.active + 1) % max(len(shell.tabs), 1))
+		// Cycle through what is actually in the bar, not through hidden tabs.
+		slots := shell_visible_count(shell)
+		if slots > 0 {
+			next := (shell_slot_of(shell, shell.active) + 1) %% slots
+			shell_switch_tab(shell, shell_visible_at(shell, next))
+		}
 		return
 	}
 	if key.code == .Rune && key.rune >= '1' && key.rune <= '9' {
-		shell_switch_tab(shell, int(key.rune - '1'))
+		// Numbers address slots in the bar, so they stay stable with what is on screen
+		// rather than counting hidden tabs.
+		if index := shell_visible_at(shell, int(key.rune - '1')); index >= 0 {
+			shell_switch_tab(shell, index)
+		}
 		return
 	}
 	tab := shell_active_tab(shell)
@@ -434,9 +450,10 @@ shell_mouse :: proc(shell: ^Shell, mouse: tui.Mouse_Event, width, height: int) {
 	if mouse.x < ACTIVITY_WIDTH {
 		shell.hover = -1
 		shell.hover_tab = -1
-		for _, index in shell.tabs {
-			top, bottom := shell_activity_bounds(shell, index, height)
+		for slot in 0 ..< shell_visible_count(shell) {
+			top, bottom := shell_activity_bounds(shell, slot, height)
 			if mouse.y >= top && mouse.y < bottom {
+				index := shell_visible_at(shell, slot)
 				shell.hover_tab = index
 				if mouse.action == .Press do shell_switch_tab(shell, index)
 				return
@@ -497,15 +514,59 @@ shell_tab_icon :: proc(shell: ^Shell, index: int) -> string {
 // Row of the first slot. The icon block is centred in the column's usable height
 // rather than stacked at the top, so a tall terminal does not leave the icons
 // stranded against the header.
+// The activity bar shows only the tabs whose predicate currently passes, so slot
+// positions and tab indices are two different things: a slot is a position in the
+// bar, an index is a position in `shell.tabs`.
+shell_visible_count :: proc(shell: ^Shell) -> int {
+	count := 0
+	for &tab in shell.tabs {
+		if tabpkg.tab_visible(&tab) do count += 1
+	}
+	return count
+}
+
+// The tab index occupying a slot, or -1 when the bar is shorter than that.
+shell_visible_at :: proc(shell: ^Shell, slot: int) -> int {
+	if slot < 0 do return -1
+	seen := 0
+	for &tab, index in shell.tabs {
+		if !tabpkg.tab_visible(&tab) do continue
+		if seen == slot do return index
+		seen += 1
+	}
+	return -1
+}
+
+// The slot a tab occupies, or -1 when it is hidden.
+shell_slot_of :: proc(shell: ^Shell, index: int) -> int {
+	seen := 0
+	for &tab, current in shell.tabs {
+		if !tabpkg.tab_visible(&tab) do continue
+		if current == index do return seen
+		seen += 1
+	}
+	return -1
+}
+
+// A tab can disappear under the cursor: walking out of a repository hides the git
+// tabs while one of them is showing. Fall back to the first tab still in the bar.
+shell_ensure_visible_active :: proc(shell: ^Shell) {
+	if shell_slot_of(shell, shell.active) >= 0 do return
+	fallback := shell_visible_at(shell, 0)
+	if fallback < 0 || fallback == shell.active do return
+	shell_switch_tab(shell, fallback)
+}
+
 shell_activity_origin :: proc(shell: ^Shell, height: int) -> int {
 	usable := max(height - FOOTER_HEIGHT - 2, 0)
-	block := len(shell.tabs) * ACTIVITY_SLOT
+	block := shell_visible_count(shell) * ACTIVITY_SLOT
 	return max((usable - block) / 2, 0)
 }
 
-shell_activity_bounds :: proc(shell: ^Shell, target, height: int) -> (int, int) {
-	if target < 0 || target >= len(shell.tabs) do return 0, 0
-	top := shell_activity_origin(shell, height) + target * ACTIVITY_SLOT
+// Row range of a slot, counted in visible positions rather than tab indices.
+shell_activity_bounds :: proc(shell: ^Shell, slot, height: int) -> (int, int) {
+	if slot < 0 || slot >= shell_visible_count(shell) do return 0, 0
+	top := shell_activity_origin(shell, height) + slot * ACTIVITY_SLOT
 	return top, top + ACTIVITY_SLOT
 }
 
@@ -539,19 +600,21 @@ shell_draw_capsule :: proc(buffer: ^tui.Buffer, middle: int, icon: string, colou
 
 shell_draw_activity :: proc(shell: ^Shell, buffer: ^tui.Buffer) {
 	fill_rect(buffer, tui.Rect{x = 0, y = 0, width = ACTIVITY_WIDTH, height = buffer.height}, tui.Style{bg = tui.ACTIVITY_BG})
-	for _, index in shell.tabs {
-		top, _ := shell_activity_bounds(shell, index, buffer.height)
+	slots := shell_visible_count(shell)
+	for slot in 0 ..< slots {
+		index := shell_visible_at(shell, slot)
+		top, _ := shell_activity_bounds(shell, slot, buffer.height)
 		if top >= buffer.height do break
 		if index == shell.active || index == shell.hover_tab do continue
 		style := tui.Style{fg = tui.RAMP_MUTED, bg = tui.ACTIVITY_BG, attrs = {.Dim}}
 		shell_draw_icon(buffer, top + ACTIVITY_SLOT / 2, shell_tab_icon(shell, index), style)
 	}
-	if shell.hover_tab >= 0 && shell.hover_tab != shell.active {
-		top, _ := shell_activity_bounds(shell, shell.hover_tab, buffer.height)
+	if hover_slot := shell_slot_of(shell, shell.hover_tab); hover_slot >= 0 && shell.hover_tab != shell.active {
+		top, _ := shell_activity_bounds(shell, hover_slot, buffer.height)
 		shell_draw_capsule(buffer, top + ACTIVITY_SLOT / 2, shell_tab_icon(shell, shell.hover_tab), tui.HOVER_BG)
 	}
-	if shell.active >= 0 && shell.active < len(shell.tabs) {
-		top, _ := shell_activity_bounds(shell, shell.active, buffer.height)
+	if active_slot := shell_slot_of(shell, shell.active); active_slot >= 0 {
+		top, _ := shell_activity_bounds(shell, active_slot, buffer.height)
 		shell_draw_capsule(buffer, top + ACTIVITY_SLOT / 2, shell_tab_icon(shell, shell.active), tui.ACTIVITY_ACTIVE_BG)
 	}
 }

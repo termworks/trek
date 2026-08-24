@@ -174,3 +174,50 @@ test_tree_expansion_is_persisted :: proc(t: ^testing.T) {
 	testing.expect_value(t, len(paths), 1)
 	if len(paths) == 1 do testing.expect_value(t, paths[0], dir)
 }
+
+hidden_tab :: proc(name: string) -> tabpkg.Tab {
+	tab := fake_tab(name)
+	tab.visible = proc(data: rawptr) -> bool { return false }
+	return tab
+}
+
+// Slots address what is on screen. A hidden tab occupies none, cannot be reached by
+// number key or by name, and never leaves the bar with a gap in it.
+@(test)
+test_hidden_tabs_leave_the_activity_bar :: proc(t: ^testing.T) {
+	shell: Shell
+	shell_init(&shell)
+	defer shell_destroy(&shell)
+	shell_add_tab(&shell, fake_tab("tree"))
+	shell_add_tab(&shell, hidden_tab("changes"))
+	shell_add_tab(&shell, fake_tab("graph"))
+
+	testing.expect_value(t, shell_visible_count(&shell), 2)
+	// The graph tab is index 2 but sits in slot 1, right after the tree.
+	testing.expect_value(t, shell_visible_at(&shell, 1), 2)
+	testing.expect_value(t, shell_slot_of(&shell, 2), 1)
+	testing.expect_value(t, shell_slot_of(&shell, 1), -1)
+
+	// Pressing 2 reaches the graph, not the hidden changes tab.
+	shell_key(&shell, tui.Key{code = .Rune, rune = '2'}, 8)
+	testing.expect_value(t, shell.active, 2)
+
+	// And a hidden tab refuses to be switched to by name.
+	testing.expect(t, shell_switch_named(&shell, "changes"))
+	testing.expect_value(t, shell.active, 2)
+}
+
+@(test)
+test_active_tab_falls_back_when_it_disappears :: proc(t: ^testing.T) {
+	shell: Shell
+	shell_init(&shell)
+	defer shell_destroy(&shell)
+	shell_add_tab(&shell, fake_tab("tree"))
+	shell_add_tab(&shell, fake_tab("changes"))
+	shell_switch_tab(&shell, 1)
+	testing.expect_value(t, shell.active, 1)
+	// The tab vanishes under the cursor, as walking out of a repository does.
+	shell.tabs[1].visible = proc(data: rawptr) -> bool { return false }
+	shell_ensure_visible_active(&shell)
+	testing.expect_value(t, shell.active, 0)
+}

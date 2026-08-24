@@ -371,6 +371,7 @@ changes_tab :: proc(root: string, allocator := context.allocator) -> Tab {
 		destroy = changes_destroy_proc,
 		on_root = changes_root_proc,
 		heading = changes_heading_proc,
+		visible = changes_visible_proc,
 	}
 }
 // Symbolic git markers rather than status letters, the vocabulary lis used.
@@ -404,4 +405,8 @@ changes_status_text :: proc(letter: rune) -> string {
 	case '!': return "!"
 	}
 	return ""
+}
+
+changes_visible_proc :: proc(data: rawptr) -> bool {
+	return (^Changes_Tab)(data).has_repo
 }

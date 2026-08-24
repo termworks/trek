@@ -369,3 +369,20 @@ engine_run_menu :: proc(engine: ^Engine, tab_name, id, row_path: string, is_dir:
 	if clua.pcall(L, 1, 0, 0) != 0 do return call_error(engine, "Lua menu run")
 	return ""
 }
+
+// Whether a Lua tab wants to be in the activity bar. A tab with no `when` is always
+// shown; `when` is called on root changes, never per frame, so it may do real work.
+// A raise is reported and treated as "show it", because hiding a tab because its
+// predicate is broken removes the only place the error could be read.
+engine_tab_visible :: proc(engine: ^Engine, name: string) -> (bool, string) {
+	L := engine.state
+	base := clua.gettop(L)
+	defer clua.settop(L, base)
+	if !push_tab_spec(engine, name) do return true, ""
+	clua.getfield(L, -1, "when")
+	if clua.isnil(L, -1) do return true, ""
+	if !clua.isfunction(L, -1) do return true, strings.clone("Lua tab `when` must be a function", engine.allocator)
+	push_context(engine, name, "", false)
+	if clua.pcall(L, 1, 1, 0) != 0 do return true, call_error(engine, "Lua when")
+	return bool(clua.toboolean(L, -1)), ""
+}
