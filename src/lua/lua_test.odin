@@ -1,6 +1,7 @@
 package lua
 
 import "core:os"
+import "core:path/filepath"
 import "core:strings"
 import "core:testing"
 import "core:time"
@@ -163,4 +164,53 @@ trek.on.root(function(path) __trek_host.reveal(path) end)
 	defer delete(event_error)
 	testing.expect(t, strings.contains(event_error, "first"))
 	testing.expect_value(t, engine.pending_reveal, root)
+}
+
+// Rule 4: a fragment registers itself and returns nothing, and the host discovers it.
+// Without this a config that wants somebody else's tab has to require, shape-check and
+// merge a returned table by hand, and every further fragment re-implements that.
+@(test)
+test_plugins_are_discovered_and_config_wins :: proc(t: ^testing.T) {
+	root, err := os.make_directory_temp("", "trek-plugins-*", context.allocator)
+	testing.expect(t, err == nil)
+	defer { _ = os.remove_all(root); delete(root) }
+	plugins, _ := filepath.join([]string{root, "plugins"}, context.allocator)
+	defer delete(plugins)
+	_ = os.make_directory_all(plugins)
+
+	write :: proc(dir, name, body: string) {
+		path, _ := filepath.join([]string{dir, name}, context.allocator)
+		defer delete(path)
+		_ = os.write_entire_file_from_string(path, body)
+	}
+	// Sorted by name, so a raise in the middle must not stop the last one.
+	write(plugins, "10-first.lua", `local trek = require("trek")
+trek.tab("first", {rows = function(ctx) return {} end})
+trek.tab("shared", {title = "from the plugin", rows = function(ctx) return {} end})`)
+	write(plugins, "20-broken.lua", `error("deliberately broken")`)
+	write(plugins, "30-last.lua", `local trek = require("trek")
+trek.tab("last", {rows = function(ctx) return {} end})`)
+	write(root, "init.lua", `local trek = require("trek")
+trek.tab("shared", {title = "from the config", rows = function(ctx) return {} end})`)
+
+	config, _ := filepath.join([]string{root, "init.lua"}, context.allocator)
+	defer delete(config)
+	os.set_env("TREK_C", config)
+	defer os.unset_env("TREK_C")
+
+	engine: Engine
+	testing.expect(t, engine_init(&engine, root))
+	defer engine_destroy(&engine)
+	testing.expect(t, engine_load_config(&engine))
+
+	names := make(map[string]string, context.allocator)
+	defer delete(names)
+	for tab in engine.tabs do names[tab.name] = tab.title
+	// Both sides of the broken plugin loaded.
+	testing.expect(t, "first" in names)
+	testing.expect(t, "last" in names)
+	// The config registered the same name afterwards, so the config's version stands.
+	testing.expect_value(t, names["shared"], "from the config")
+	// And the failure was reported rather than swallowed or made fatal.
+	testing.expect(t, strings.contains(engine.plugin_error, "20-broken.lua"))
 }

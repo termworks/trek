@@ -179,6 +179,7 @@ run_tui :: proc(root: string, options: Options) -> bool {
 	ui.shell_add_tab(&shell, tabs.graph_tab(root))
 	for &definition in config.tabs do ui.shell_add_tab(&shell, tabs.lua_tab(&config, &definition))
 	_ = ui.shell_switch_named(&shell, config.settings.start_tab)
+	if config.plugin_error != "" do ui.shell_set_footer(&shell, config.plugin_error)
 	if message := luaconfig.engine_emit(&config, "root", root); message != "" {
 		ui.shell_set_footer(&shell, message)
 		delete(message)

@@ -224,6 +224,35 @@ hidden tab holds no slot, so the number keys always address what is on screen,
 and it cannot be reached by `Tab`, by number, or by name. If the tab you are
 looking at disappears, trek falls back to the first one still in the bar.
 
+
+### Plugins
+
+A file in `~/.config/trek/plugins/*.lua` is discovered and run automatically. It
+registers what it wants and returns nothing, exactly like `init.lua`:
+
+```lua
+-- ~/.config/trek/plugins/todo.lua
+local trek = require("trek")
+
+trek.tab("todo", {
+  icon = "T",
+  title = "TODO",
+  rows = function(ctx) ... end,
+})
+```
+
+Nothing has to be required or merged by hand — the host does the discovery, so a
+config that wants somebody else's tab does not grow shape-checking for it.
+
+Plugins run **before** `init.lua`, in name order. Since every registrar is keyed,
+registering the same name again replaces the earlier one, so your own config always
+wins over a plugin's — and prefixing files (`10-`, `20-`) fixes the order between
+plugins rather than leaving it to the filesystem.
+
+A plugin that raises is **reported in the footer and skipped**; the ones after it
+still load. That is deliberately unlike `init.lua`, where a raise is fatal: your own
+file failing means carrying on would silently apply settings you did not ask for,
+while a third-party plugin failing must not take the tool down with it.
 ## State
 
 Preferences and expanded directories are stored in
