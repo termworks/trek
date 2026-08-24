@@ -120,3 +120,57 @@ destroy_lines :: proc(lines: ^[dynamic]string) {
 	delete(lines^)
 	lines^ = nil
 }
+
+// Fit a path into `max_width` by abbreviating leading segments to their first
+// character, one at a time from the root end: /home/bresilla/code/tools/trek
+// becomes /h/bresilla/code/tools/trek, then /h/b/code/tools/trek, and so on. The
+// last segment is what the reader is actually looking at, so it is never shortened
+// this way; if even the fully abbreviated form does not fit, the result is
+// truncated normally.
+shorten_path :: proc(path: string, max_width: int, allocator := context.allocator) -> string {
+	if max_width <= 0 do return strings.clone("", allocator)
+	if text_width(path) <= max_width do return strings.clone(path, allocator)
+
+	rooted := len(path) > 0 && path[0] == '/'
+	trimmed := strings.trim_suffix(path, "/")
+	segments := strings.split(trimmed, "/", context.temp_allocator)
+	// A leading "/" splits into an empty first segment; drop it and remember it.
+	start := 0
+	for start < len(segments) && segments[start] == "" do start += 1
+	if len(segments) - start <= 1 do return truncate_text(path, max_width, allocator = allocator)
+
+	// Abbreviate one more leading segment per pass, never touching the last.
+	shortened := 0
+	limit := len(segments) - start - 1
+	for {
+		builder := strings.builder_make(context.temp_allocator)
+		if rooted do strings.write_string(&builder, "/")
+		for index in start ..< len(segments) {
+			if index > start do strings.write_string(&builder, "/")
+			segment := segments[index]
+			if index - start < shortened && len(segment) > 0 {
+				strings.write_string(&builder, first_rune_text(segment))
+			} else {
+				strings.write_string(&builder, segment)
+			}
+		}
+		candidate := strings.to_string(builder)
+		if text_width(candidate) <= max_width || shortened >= limit {
+			if text_width(candidate) <= max_width do return strings.clone(candidate, allocator)
+			return truncate_text(candidate, max_width, allocator = allocator)
+		}
+		shortened += 1
+	}
+}
+
+// The first rune of a segment, as text. Taking one byte would split a multi-byte
+// character and emit a broken glyph.
+first_rune_text :: proc(value: string) -> string {
+	for _, index in value {
+		_ = index
+		for offset in 1 ..= len(value) {
+			if offset == len(value) || (value[offset] & 0xc0) != 0x80 do return value[:offset]
+		}
+	}
+	return value
+}

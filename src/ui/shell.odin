@@ -305,6 +305,7 @@ shell_apply_result :: proc(shell: ^Shell, result: tabpkg.Tab_Result) {
 		shell_sync_preferences(shell)
 		if shell.preferences != nil do _ = settings.preferences_save(shell.preferences)
 		shell_reload(shell)
+		shell_apply_selection(shell, result)
 	}
 	if result.open_menu {
 		shell_open_menu(shell)
@@ -624,10 +625,17 @@ shell_draw_header :: proc(shell: ^Shell, buffer: ^tui.Buffer, tab: ^tabpkg.Tab) 
 	y := 0
 	x := ACTIVITY_WIDTH + CONTENT_GUTTER
 	if tab.name == "tree" {
-		// A bare folder name is a label and reads well upper-cased; a full path is not,
-		// and upper-casing it mangles case-sensitive directory names.
 		label := heading.title
-		if !strings.contains(label, "/") do label = strings.to_upper(label, context.temp_allocator)
+		if heading.is_path {
+			// The action buttons sit hard right, so the path may only use what is left
+			// after them; otherwise it slides underneath and both become unreadable.
+			room := max(buffer.width - x - 1 - shell_header_actions_width(tab), 0)
+			label = tui.shorten_path(label, room, context.temp_allocator)
+		} else {
+			// A bare folder name is a label and reads well upper-cased; a path is not,
+			// and upper-casing it mangles case-sensitive directory names.
+			label = strings.to_upper(label, context.temp_allocator)
+		}
 		x += tui.buffer_draw_text(buffer, x, y, " ", tui.PLAIN_STYLE, 1)
 		x += tui.buffer_draw_text(buffer, x, y, label, tui.Style{fg = tui.ACCENT, attrs = {.Bold}}, buffer.width - x)
 	} else {
@@ -642,8 +650,7 @@ shell_draw_header :: proc(shell: ^Shell, buffer: ^tui.Buffer, tab: ^tabpkg.Tab) 
 			_ = tui.buffer_draw_text(buffer, x, y, heading.meta, tui.Style{attrs = {.Dim}}, buffer.width - x)
 		}
 	}
-	actions := " \ueb37 \ueac5 "
-	if tab.name == "tree" do actions = " \uea7f \uea80 \ueb37 \ueac5 "
+	actions := shell_header_actions(tab)
 	actions_width := tui.text_width(actions)
 	if actions_width < buffer.width do tui.buffer_draw_text(buffer, buffer.width - actions_width, y, actions, tui.Style{attrs = {.Dim}}, actions_width)
 }
@@ -703,4 +710,37 @@ shell_render :: proc(shell: ^Shell, buffer: ^tui.Buffer, layout: ^tui.Layout) {
 	defer delete(footer)
 	tui.buffer_draw_text(buffer, content_x, footer_y, footer, footer_style, max(content_width - 1, 0))
 	overlay_render(&shell.overlay, buffer)
+}
+
+// The hover action glyphs drawn hard right of the header.
+shell_header_actions :: proc(tab: ^tabpkg.Tab) -> string {
+	if tab != nil && tab.name == "tree" do return "     "
+	return "   "
+}
+
+shell_header_actions_width :: proc(tab: ^tabpkg.Tab) -> int {
+	return tui.text_width(shell_header_actions(tab))
+}
+
+// Put the cursor where the tab asked. A remembered row that no longer exists falls
+// back to the first selectable one, so re-rooting never leaves nothing selected.
+shell_apply_selection :: proc(shell: ^Shell, result: tabpkg.Tab_Result) {
+	if result.select_id == "" && !result.select_first do return
+	if result.select_id != "" {
+		for row, index in shell.rows {
+			if row.selectable && row.path == result.select_id {
+				shell.selected = index
+				shell.snap = true
+				return
+			}
+		}
+	}
+	if !result.select_first do return
+	for row, index in shell.rows {
+		if row.selectable {
+			shell.selected = index
+			shell.snap = true
+			return
+		}
+	}
 }

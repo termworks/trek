@@ -233,6 +233,24 @@ make.recipe{
 make.alias("r", "run")
 
 make.recipe{
+  name = "run-bordered",
+  desc = "run it in a sized, centred box instead of the whole terminal",
+  deps = { "dev" },
+  params = {
+    { "--width", desc = "viewport columns (default 50)" },
+    { "--height", desc = "viewport rows (default 30)" },
+    { "--align", desc = "center, top-left, top-right, bottom-left, bottom-right" },
+  },
+  run = function(a)
+    local argv = { "--width", tostring(a.width or 50), "--height", tostring(a.height or 30) }
+    if a.align then argv[#argv + 1] = "--align"; argv[#argv + 1] = a.align end
+    for _, word in ipairs(a.rest or {}) do argv[#argv + 1] = word end
+    sh["./" .. BIN](table.unpack(argv))
+  end,
+}
+make.alias("rb", "run-bordered")
+
+make.recipe{
   name = "smoke",
   desc = "launch in a PTY and wait for delayed input",
   deps = { "build" },

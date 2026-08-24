@@ -30,6 +30,9 @@ Row :: struct {
 
 Tab_Heading :: struct {
 	title:  string,
+	// A filesystem path, which the header abbreviates from the root end when it does
+	// not fit rather than clipping the part the reader cares about.
+	is_path: bool,
 	detail: string,
 	meta:   string,
 }
@@ -58,6 +61,10 @@ Tab_Result :: struct {
 	open_path:    string,
 	root_path:    string,
 	switch_tab:   string,
+	// After the rows are rebuilt, put the cursor on this row if it still exists;
+	// otherwise, when select_first is set, on the first selectable row.
+	select_id:    string,
+	select_first: bool,
 }
 
 Rows_Proc :: proc(data: rawptr, allocator: runtime.Allocator) -> [dynamic]Row

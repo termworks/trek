@@ -401,3 +401,37 @@ test_explorer_mode_toggle_clears_expansion :: proc(t: ^testing.T) {
 	testing.expect_value(t, len(flat), 1)
 	rows_destroy(&flat)
 }
+
+// Walking around explorer mode must not lose your place: entering a directory for
+// the first time starts at the top, climbing out lands on the directory you left,
+// and going back in returns to wherever you had got to.
+@(test)
+test_explorer_remembers_selection_per_directory :: proc(t: ^testing.T) {
+	root := tabs_test_root(t)
+	defer { _ = os.remove_all(root); delete(root) }
+	child := tabs_test_join(root, "child")
+	defer delete(child)
+	_ = os.make_directory(child)
+	inner := tabs_test_join(child, "inner")
+	defer delete(inner)
+	_ = os.make_directory(inner)
+	leaf := tabs_test_join(child, "leaf.txt")
+	defer delete(leaf)
+	_ = os.write_entire_file_from_string(leaf, "x")
+
+	state := tree_tab_new(root, false, true)
+	defer tree_destroy_proc(rawptr(state))
+
+	// First visit: nothing remembered, so the caller is told to take the top row.
+	entering := tree_reroot(state, child, child)
+	testing.expect(t, entering.select_first)
+	testing.expect_value(t, entering.select_id, "")
+
+	// Climbing out lands on the directory just left.
+	leaving := tree_parent(state, leaf)
+	testing.expect_value(t, leaving.select_id, child)
+
+	// And going back in restores the row that was selected down there.
+	returning := tree_reroot(state, child, child)
+	testing.expect_value(t, returning.select_id, leaf)
+}

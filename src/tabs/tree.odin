@@ -9,6 +9,8 @@ import gitcore "../git"
 import model "../model"
 import tui "../tui"
 Tree_Tab :: struct {
+	// Directory -> the row that was selected there.
+	history: map[string]string,
 	tree: model.Tree,
 }
 
@@ -17,6 +19,7 @@ tree_tab_new :: proc(root: string, show_hidden := false, explore := false, alloc
 	model.tree_init(&state.tree, root, allocator)
 	state.tree.show_hidden = show_hidden
 	state.tree.flat = explore
+	state.history = make(map[string]string, allocator)
 	return state
 }
 
@@ -89,8 +92,27 @@ tree_rows_proc :: proc(data: rawptr, allocator: runtime.Allocator) -> [dynamic]R
 	return rows
 }
 
+// Remember which row was selected in a directory, so returning to it puts the cursor
+// back where it was rather than at the top.
+tree_remember :: proc(state: ^Tree_Tab, dir, selected: string) {
+	if dir == "" || selected == "" do return
+	if existing, found := state.history[dir]; found {
+		delete(existing)
+		state.history[dir] = strings.clone(selected, state.tree.allocator)
+		return
+	}
+	state.history[strings.clone(dir, state.tree.allocator)] = strings.clone(selected, state.tree.allocator)
+}
+
 // Re-root the tree somewhere else, keeping the explorer mode and hidden-file choice.
-tree_reroot :: proc(state: ^Tree_Tab, path: string) -> Tab_Result {
+// `selected` is the row the cursor was on, which is what makes coming back work.
+tree_reroot :: proc(state: ^Tree_Tab, path: string, selected: string) -> Tab_Result {
+	previous := strings.clone(state.tree.root, context.temp_allocator)
+	tree_remember(state, previous, selected)
+	// Climbing out: the directory just left is the row to land on up there.
+	parent := filepath.dir(previous, context.temp_allocator)
+	if parent == path do tree_remember(state, path, previous)
+
 	flat := state.tree.flat
 	hidden := state.tree.show_hidden
 	allocator := state.tree.allocator
@@ -100,20 +122,29 @@ tree_reroot :: proc(state: ^Tree_Tab, path: string) -> Tab_Result {
 	model.tree_init(&state.tree, root, allocator)
 	state.tree.flat = flat
 	state.tree.show_hidden = hidden
-	return Tab_Result{rows_changed = true, root_path = state.tree.root, open_path = state.tree.root}
+
+	remembered := ""
+	if value, found := state.history[state.tree.root]; found do remembered = value
+	return Tab_Result{
+		rows_changed = true,
+		root_path = state.tree.root,
+		open_path = state.tree.root,
+		select_id = remembered,
+		select_first = true,
+	}
 }
 
 // The parent of the current root, or nothing when already at the filesystem top.
-tree_parent :: proc(state: ^Tree_Tab) -> Tab_Result {
+tree_parent :: proc(state: ^Tree_Tab, selected: string) -> Tab_Result {
 	parent := filepath.dir(state.tree.root, context.temp_allocator)
 	if parent == "" || parent == state.tree.root do return Tab_Result{message = "already at the top"}
-	return tree_reroot(state, parent)
+	return tree_reroot(state, parent, selected)
 }
 
 tree_selected_toggle :: proc(state: ^Tree_Tab, selected: ^Row) -> Tab_Result {
 	if selected == nil || !selected.is_dir do return {}
 	// Explorer mode walks into a directory; tree mode unfolds it where it stands.
-	if state.tree.flat do return tree_reroot(state, selected.path)
+	if state.tree.flat do return tree_reroot(state, selected.path, selected.path)
 	model.tree_toggle(&state.tree, selected.path)
 	return Tab_Result{rows_changed = true, open_path = selected.path}
 }
@@ -132,10 +163,10 @@ tree_key_proc :: proc(data: rawptr, key: tui.Key, selected: ^Row) -> Tab_Result 
 	}
 	if key.code == .Left {
 		// In explorer mode Left is "go up"; in tree mode it folds the row back.
-		if state.tree.flat do return tree_parent(state)
+		if state.tree.flat do return tree_parent(state, selected_path(selected))
 		if selected != nil && selected.is_dir && selected.expanded do return tree_selected_toggle(state, selected)
 	}
-	if key.code == .Backspace && state.tree.flat do return tree_parent(state)
+	if key.code == .Backspace && state.tree.flat do return tree_parent(state, selected_path(selected))
 	if key.code != .Rune do return {}
 	switch key.rune {
 	case '.':
@@ -252,6 +283,11 @@ tree_action_proc :: proc(data: rawptr, selected: ^Row, action: model.Action, val
 tree_destroy_proc :: proc(data: rawptr) {
 	state := (^Tree_Tab)(data)
 	allocator := state.tree.allocator
+	for key, value in state.history {
+		delete(key)
+		delete(value)
+	}
+	delete(state.history)
 	model.tree_destroy(&state.tree)
 	free(state, allocator)
 }
@@ -260,7 +296,7 @@ tree_heading_proc :: proc(data: rawptr) -> Tab_Heading {
 	state := (^Tree_Tab)(data)
 	// Explorer mode moves between directories, so the full path is the context that
 	// matters; tree mode stays rooted and only needs the folder name.
-	if state.tree.flat do return Tab_Heading{title = state.tree.root}
+	if state.tree.flat do return Tab_Heading{title = state.tree.root, is_path = true}
 	return Tab_Heading{title = filepath.base(state.tree.root)}
 }
 
@@ -306,3 +342,8 @@ tree_restore_expanded :: proc(tab: ^Tab, paths: []string) -> bool {
 	return true
 }
 
+
+selected_path :: proc(selected: ^Row) -> string {
+	if selected == nil do return ""
+	return selected.path
+}

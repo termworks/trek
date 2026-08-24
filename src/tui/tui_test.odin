@@ -191,3 +191,41 @@ test_blit_copies_and_clips :: proc(t: ^testing.T) {
 	wrapped, _ := buffer_get(&dst, 0, 0)
 	testing.expect(t, wrapped.rune != 'x')
 }
+
+@(test)
+test_shorten_path_abbreviates_from_the_root :: proc(t: ^testing.T) {
+	path := "/home/bresilla/data/code/tools/trek"
+	// Fits: untouched.
+	full := shorten_path(path, 80)
+	defer delete(full)
+	testing.expect_value(t, full, path)
+
+	// One segment short: the leading one abbreviates first.
+	one := shorten_path(path, 34)
+	defer delete(one)
+	testing.expect_value(t, one, "/h/bresilla/data/code/tools/trek")
+
+	two := shorten_path(path, 30)
+	defer delete(two)
+	testing.expect_value(t, two, "/h/b/data/code/tools/trek")
+
+	// Squeezed hard, everything but the last segment collapses.
+	tight := shorten_path(path, 16)
+	defer delete(tight)
+	testing.expect_value(t, tight, "/h/b/d/c/t/trek")
+
+	// Narrower than even that: falls back to an ellipsis rather than lying.
+	tiny := shorten_path(path, 10)
+	defer delete(tiny)
+	testing.expect(t, text_width(tiny) <= 10)
+
+	// A single segment has nothing to abbreviate.
+	single := shorten_path("/verylongdirectoryname", 10)
+	defer delete(single)
+	testing.expect(t, text_width(single) <= 10)
+
+	// Multi-byte segments abbreviate to a whole rune, not a broken byte.
+	unicode := shorten_path("/日本語/データ/trek", 12)
+	defer delete(unicode)
+	testing.expect(t, text_width(unicode) <= 12)
+}
