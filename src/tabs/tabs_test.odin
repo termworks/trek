@@ -118,3 +118,22 @@ test_changes_discovers_child_repositories :: proc(t: ^testing.T) {
 	}
 	testing.expect_value(t, boxes, 2)
 }
+
+@(test)
+test_graph_rows_render_commits_and_refs :: proc(t: ^testing.T) {
+	root := tabs_test_repo(t)
+	defer { _ = os.remove_all(root); delete(root) }
+	state := graph_new(root)
+	defer graph_destroy_proc(rawptr(state))
+	rows := graph_rows_proc(rawptr(state), context.allocator)
+	defer rows_destroy(&rows)
+	commits := 0
+	for &row in rows {
+		if row.kind == .Graph_Commit {
+			commits += 1
+			testing.expect(t, row.selectable)
+			testing.expect(t, row.path != "")
+		}
+	}
+	testing.expect_value(t, commits, 1)
+}

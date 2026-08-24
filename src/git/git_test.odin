@@ -2,6 +2,7 @@ package git
 
 import "core:os"
 import "core:path/filepath"
+import "core:strings"
 import "core:testing"
 
 git_test_dir :: proc(t: ^testing.T) -> string {
@@ -122,4 +123,86 @@ test_stage_under_keeps_rename_pair :: proc(t: ^testing.T) {
 	defer delete(stage_message)
 	testing.expect(t, staged)
 	testing.expect_value(t, result.count, 2)
+}
+
+Commit_Spec :: struct {
+	hash:    string,
+	parents: string,
+}
+
+graph_test_history :: proc(specs: []Commit_Spec) -> History {
+	history := History{commits = make([dynamic]Commit, context.allocator), allocator = context.allocator}
+	for spec in specs {
+		append(&history.commits, Commit{
+			hash = strings.clone(spec.hash),
+			parents = split_owned(spec.parents, " ", context.allocator),
+			refs = make([dynamic]string, context.allocator),
+			author = strings.clone("tester"),
+			subject = strings.clone(spec.hash),
+		})
+	}
+	return history
+}
+
+graph_commit_rows :: proc(graph: ^Graph) -> int {
+	count := 0
+	for row in graph.rows {
+		if !row.connector do count += 1
+	}
+	return count
+}
+
+@(test)
+test_graph_assigns_linear_history :: proc(t: ^testing.T) {
+	history := graph_test_history([]Commit_Spec{{"a", "b"}, {"b", "c"}, {"c", ""}})
+	defer history_destroy(&history)
+	graph := assign_lanes(&history)
+	defer graph_destroy(&graph)
+	testing.expect_value(t, graph_commit_rows(&graph), 3)
+	testing.expect_value(t, graph.max_lanes, 1)
+	testing.expect_value(t, graph.rows[0].cells[0], '●')
+}
+
+@(test)
+test_graph_assigns_merge_and_octopus_lanes :: proc(t: ^testing.T) {
+	merge := graph_test_history([]Commit_Spec{{"m", "a b"}, {"a", "c"}, {"b", "c"}, {"c", ""}})
+	defer history_destroy(&merge)
+	merge_graph := assign_lanes(&merge)
+	defer graph_destroy(&merge_graph)
+	testing.expect(t, merge_graph.max_lanes >= 2)
+	octopus := graph_test_history([]Commit_Spec{{"m", "a b c d"}, {"a", ""}, {"b", ""}, {"c", ""}, {"d", ""}})
+	defer history_destroy(&octopus)
+	octopus_graph := assign_lanes(&octopus)
+	defer graph_destroy(&octopus_graph)
+	testing.expect_value(t, octopus_graph.max_lanes, 4)
+	testing.expect_value(t, graph_commit_rows(&octopus_graph), 5)
+}
+
+@(test)
+test_graph_collapses_lane_overflow :: proc(t: ^testing.T) {
+	history := graph_test_history([]Commit_Spec{
+		{"m", "a b c d e f"}, {"a", ""}, {"b", ""}, {"c", ""},
+		{"d", ""}, {"e", ""}, {"f", ""},
+	})
+	defer history_destroy(&history)
+	graph := assign_lanes(&history, 3)
+	defer graph_destroy(&graph)
+	overflow := false
+	for row in graph.rows {
+		if row.overflow do overflow = true
+	}
+	testing.expect(t, overflow)
+	testing.expect(t, graph.max_lanes <= 3)
+}
+
+@(test)
+test_graph_log_parser_reads_refs :: proc(t: ^testing.T) {
+	raw := "abc\u0000def 123\u0000HEAD -> main, tag: v1\u0000Ada\u00001700000000\u0000subject\u0000"
+	history := parse_log(raw)
+	defer history_destroy(&history)
+	testing.expect_value(t, len(history.commits), 1)
+	testing.expect_value(t, len(history.commits[0].parents), 2)
+	testing.expect_value(t, len(history.commits[0].refs), 2)
+	testing.expect_value(t, history.commits[0].refs[0], "HEAD -> main")
+	testing.expect_value(t, history.commits[0].timestamp, i64(1700000000))
 }
