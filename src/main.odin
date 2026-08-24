@@ -94,6 +94,8 @@ run_tui :: proc(root: string) -> bool {
 		return false
 	}
 	defer tui.terminal_restore(&terminal)
+	previous_assertion := tui.terminal_arm_panic_restore(&terminal)
+	defer tui.terminal_disarm_panic_restore(previous_assertion)
 	_ = tui.terminal_install_signal_handlers()
 
 	width, height, ok := tui.terminal_size()
@@ -131,6 +133,7 @@ run_tui :: proc(root: string) -> bool {
 
 	input: [4096]byte
 	for !shell.quit && !tui.terminal_should_exit() {
+		free_all(context.temp_allocator)
 		if luaconfig.engine_poll(&config) do ui.shell_reload(&shell)
 		if tui.terminal_take_resize() {
 			if new_width, new_height, resized := tui.terminal_size(); resized {
@@ -139,6 +142,8 @@ run_tui :: proc(root: string) -> bool {
 		}
 		ui.shell_render(&shell, &buffer, &layout)
 		if !tui.buffer_flush(&buffer) do return false
+		cursor_x, cursor_y, cursor_visible := ui.shell_cursor_position(&shell, buffer.width, buffer.height)
+		tui.terminal_cursor(cursor_visible, cursor_x, cursor_y)
 		count, err := os.read(os.stdin, input[:])
 		if err != nil do return false
 		if count == 0 do continue

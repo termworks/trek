@@ -87,6 +87,18 @@ test_overlay_prompt_edits_unicode :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_prompt_requests_a_visible_cursor :: proc(t: ^testing.T) {
+	shell: Shell
+	shell_init(&shell)
+	defer shell_destroy(&shell)
+	overlay_prompt(&shell.overlay, "Rename", .Rename, "name")
+	x, y, visible := shell_cursor_position(&shell, 40, 10)
+	testing.expect(t, visible)
+	testing.expect(t, x > 0)
+	testing.expect(t, y > 0)
+}
+
+@(test)
 test_shell_renders_headless_buffer :: proc(t: ^testing.T) {
 	shell: Shell
 	shell_init(&shell)

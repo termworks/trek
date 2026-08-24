@@ -179,6 +179,24 @@ test_graph_assigns_merge_and_octopus_lanes :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_graph_assigns_criss_cross_history :: proc(t: ^testing.T) {
+	history := graph_test_history([]Commit_Spec{
+		{"m", "a b"}, {"a", "c d"}, {"b", "d c"},
+		{"c", "e"}, {"d", "e"}, {"e", ""},
+	})
+	defer history_destroy(&history)
+	graph := assign_lanes(&history)
+	defer graph_destroy(&graph)
+	testing.expect_value(t, graph_commit_rows(&graph), 6)
+	testing.expect(t, graph.max_lanes >= 2)
+	connectors := 0
+	for row in graph.rows {
+		if row.connector do connectors += 1
+	}
+	testing.expect(t, connectors >= 2)
+}
+
+@(test)
 test_graph_collapses_lane_overflow :: proc(t: ^testing.T) {
 	history := graph_test_history([]Commit_Spec{
 		{"m", "a b c d e f"}, {"a", ""}, {"b", ""}, {"c", ""},

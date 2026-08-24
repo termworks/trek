@@ -53,6 +53,8 @@ TREE_DIR_MENU := [?]Menu_Entry{
 	{id = "new-folder", label = "New Folder", action = .New_Folder},
 	{id = "rename", label = "Rename", action = .Rename},
 	{id = "delete", label = "Delete", action = .Delete, danger = true},
+	{id = "copy-path", label = "Copy Path", action = .Copy_Path},
+	{id = "copy-relative", label = "Copy Relative Path", action = .Copy_Relative_Path},
 	{id = "change-folder", label = "Change Folder", action = .Change_Folder},
 }
 
@@ -62,6 +64,8 @@ TREE_DIR_GIT_MENU := [?]Menu_Entry{
 	{id = "stage", label = "Stage Changes", action = .Stage_Changes},
 	{id = "rename", label = "Rename", action = .Rename},
 	{id = "delete", label = "Delete", action = .Delete, danger = true},
+	{id = "copy-path", label = "Copy Path", action = .Copy_Path},
+	{id = "copy-relative", label = "Copy Relative Path", action = .Copy_Relative_Path},
 	{id = "change-folder", label = "Change Folder", action = .Change_Folder},
 }
 

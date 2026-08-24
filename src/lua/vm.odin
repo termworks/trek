@@ -138,7 +138,6 @@ engine_load_config :: proc(engine: ^Engine) -> bool {
 		}
 		return engine_read_api(engine)
 	}
-	os.file_info_delete(info, context.temp_allocator)
 	contents, read_error := os.read_entire_file(path, context.temp_allocator)
 	if read_error != nil {
 		delete(engine.error)
@@ -180,4 +179,9 @@ engine_poll :: proc(engine: ^Engine) -> bool {
 	if generation == engine.seen_generation do return false
 	engine.seen_generation = generation
 	return true
+}
+
+engine_set_root :: proc(engine: ^Engine, root: string) {
+	delete(engine.root)
+	engine.root = strings.clone(root, engine.allocator)
 }

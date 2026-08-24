@@ -119,6 +119,7 @@ test_lua_key_and_event_handlers_survive_errors :: proc(t: ^testing.T) {
 	source := `
 local trek = require("trek")
 trek.keys.tree["?"] = function(ctx) ctx.goto_tab("graph") end
+trek.keys.tree["enter"] = function(ctx) ctx.reveal("enter") end
 trek.menu.tree["mark"] = {
   label = "Mark",
   when = function(ctx) return ctx.row.path ~= "" end,
@@ -134,6 +135,14 @@ trek.on.root(function(path) __trek_host.reveal(path) end)
 	testing.expect(t, handled)
 	testing.expect_value(t, key_error, "")
 	testing.expect_value(t, engine.pending_tab, "graph")
+	special_error: string
+	handled, special_error = engine_handle_key(&engine, "tree", tui.Key{code = .Enter})
+	defer delete(special_error)
+	testing.expect(t, handled)
+	testing.expect_value(t, special_error, "")
+	testing.expect_value(t, engine.pending_reveal, "enter")
+	delete(engine.pending_reveal)
+	engine.pending_reveal = ""
 	entries, menu_error := engine_menu_entries(&engine, "tree", root, true)
 	defer {
 		for &entry in entries {

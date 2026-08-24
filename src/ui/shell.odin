@@ -164,6 +164,14 @@ shell_apply_lua_pending :: proc(shell: ^Shell) {
 	}
 }
 
+shell_change_root :: proc(shell: ^Shell, root: string) {
+	if shell.config != nil do luaconfig.engine_set_root(shell.config, root)
+	for &tab in shell.tabs {
+		if tab.name == "tree" do continue
+		_ = tabpkg.tab_root(&tab, root)
+	}
+}
+
 shell_add_tab :: proc(shell: ^Shell, tab: tabpkg.Tab) {
 	append(&shell.tabs, tab)
 	if len(shell.tabs) == 1 do shell_reload(shell)
@@ -293,11 +301,14 @@ shell_apply_result :: proc(shell: ^Shell, result: tabpkg.Tab_Result) {
 			delete(message)
 		}
 	}
-	if shell.config != nil && result.root_path != "" {
-		message := luaconfig.engine_emit(shell.config, "root", result.root_path)
-		if message != "" {
-			shell_set_footer(shell, message)
-			delete(message)
+	if result.root_path != "" {
+		shell_change_root(shell, result.root_path)
+		if shell.config != nil {
+			message := luaconfig.engine_emit(shell.config, "root", result.root_path)
+			if message != "" {
+				shell_set_footer(shell, message)
+				delete(message)
+			}
 		}
 	}
 	if result.rows_changed {
@@ -467,6 +478,35 @@ shell_mouse :: proc(shell: ^Shell, mouse: tui.Mouse_Event, width, height: int) {
 			shell_open_menu(shell)
 		}
 	}
+}
+
+shell_cursor_position :: proc(shell: ^Shell, width, height: int) -> (int, int, bool) {
+	if shell.overlay.kind == .Prompt {
+		panel_width := min(max(tui.text_width(shell.overlay.title) + 4, 28), width - 2)
+		x := (width - panel_width) / 2
+		y := (height - 3) / 2
+		input_width := max(panel_width - 6, 0)
+		column := min(tui.text_width(string(shell.overlay.input[:])), input_width)
+		return x + 4 + column, y + 1, true
+	}
+	if shell.overlay.kind != .None do return 0, 0, false
+	row := shell_selected_row(shell)
+	if row == nil || row.kind != .Commit_Box do return 0, 0, false
+	line := shell_row_top(shell, shell.selected) - shell.scroll + 1
+	if line < 1 || line + 1 >= height - 1 do return 0, 0, false
+	value := ""
+	if len(row.node.children) > 1 {
+		input_row := &row.node.children[1]
+		if len(input_row.children) > 1 {
+			priority := &input_row.children[1]
+			if len(priority.children) > 0 {
+				truncate := &priority.children[0]
+				if len(truncate.children) > 0 do value = truncate.children[0].value
+			}
+		}
+	}
+	column := min(tui.text_width(value), max(width - ACTIVITY_WIDTH - 5, 0))
+	return ACTIVITY_WIDTH + 3 + column, line + 1, true
 }
 
 fill_rect :: proc(buffer: ^tui.Buffer, rect: tui.Rect, style: tui.Style) {

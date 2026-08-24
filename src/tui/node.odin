@@ -34,6 +34,7 @@ Node :: struct {
 	importance: int,
 	region_id:  string,
 	actions:    []string,
+	owned_actions: [dynamic]string,
 	hover:      Style,
 	press:      Style,
 	owns_values: bool,
@@ -109,8 +110,8 @@ node_destroy :: proc(node: ^Node) {
 		delete(node.value)
 		delete(node.mark)
 		delete(node.region_id)
-		for action in node.actions do delete(action)
-		delete(node.actions)
+		for action in node.owned_actions do delete(action)
+		delete(node.owned_actions)
 	}
 	node^ = {}
 }

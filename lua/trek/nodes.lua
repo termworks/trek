@@ -50,7 +50,7 @@ package.preload["trek.nodes"] = function()
       id = options.id or "",
       actions = options.actions or {},
       hover_style = options.hover_style,
-      press_style = options.press_style,
+      press_style = options.press_style or options.press_styles,
     })
   end
 

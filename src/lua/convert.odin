@@ -155,6 +155,7 @@ lua_to_node :: proc(L: ^clua.State, index: c.int, allocator := context.allocator
 			allocator,
 		)
 		node.owns_values = true
+		node.owned_actions = actions
 		return node, true
 	}
 	return {}, false

@@ -180,9 +180,61 @@ engine_tab_select :: proc(engine: ^Engine, name, row_path: string, is_dir: bool)
 }
 
 key_text :: proc(key: tui.Key, allocator := context.allocator) -> string {
-	if key.code != .Rune do return ""
-	encoded, count := utf8.encode_rune(key.rune)
-	return strings.clone(string(encoded[:count]), allocator)
+	value := ""
+	owned := ""
+	if key.code == .Rune {
+		encoded, count := utf8.encode_rune(key.rune)
+		owned = strings.clone(string(encoded[:count]), allocator)
+		value = owned
+	} else {
+		switch key.code {
+		case .Escape: value = "escape"
+		case .Enter: value = "enter"
+		case .Tab: value = "tab"
+		case .Backspace: value = "backspace"
+		case .Up: value = "up"
+		case .Down: value = "down"
+		case .Left: value = "left"
+		case .Right: value = "right"
+		case .Home: value = "home"
+		case .End: value = "end"
+		case .Page_Up: value = "pageup"
+		case .Page_Down: value = "pagedown"
+		case .Delete: value = "delete"
+		case .Insert: value = "insert"
+		case .F1: value = "f1"
+		case .F2: value = "f2"
+		case .F3: value = "f3"
+		case .F4: value = "f4"
+		case .None, .Rune: return ""
+		}
+	}
+	if key.modifiers == {} {
+		if owned != "" do return owned
+		return strings.clone(value, allocator)
+	}
+	prefix := ""
+	control := .Control in key.modifiers
+	alt := .Alt in key.modifiers
+	shift := .Shift in key.modifiers
+	if control && alt && shift {
+		prefix = "ctrl+alt+shift+"
+	} else if control && alt {
+		prefix = "ctrl+alt+"
+	} else if control && shift {
+		prefix = "ctrl+shift+"
+	} else if alt && shift {
+		prefix = "alt+shift+"
+	} else if control {
+		prefix = "ctrl+"
+	} else if alt {
+		prefix = "alt+"
+	} else if shift {
+		prefix = "shift+"
+	}
+	result := fmt.aprintf("%s%s", prefix, value, allocator = allocator)
+	delete(owned, allocator)
+	return result
 }
 
 push_key_handler :: proc(engine: ^Engine, tab_name, key: string) -> bool {

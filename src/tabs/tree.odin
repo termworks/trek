@@ -1,6 +1,8 @@
 package tabs
 
 import "base:runtime"
+import "core:encoding/base64"
+import "core:fmt"
 import "core:os"
 import "core:path/filepath"
 import "core:strings"
@@ -194,6 +196,26 @@ tree_menu_proc :: proc(data: rawptr, selected: ^Row) -> []model.Menu_Entry {
 	return model.tree_menu(selected.is_dir, in_repo)
 }
 
+tree_copy_path :: proc(state: ^Tree_Tab, selected: ^Row, relative: bool) -> (string, bool) {
+	value := strings.clone(selected.path, context.allocator)
+	if relative {
+		relative_value, err := filepath.rel(state.tree.root, selected.path, context.allocator)
+		delete(value)
+		if err != nil do return "", false
+		value = relative_value
+	}
+	encoded := base64.encode(transmute([]byte)(value), allocator = context.allocator)
+	defer delete(encoded)
+	sequence := fmt.aprintf("\x1b]52;c;%s\x07", encoded)
+	defer delete(sequence)
+	_, write_error := os.write_string(os.stdout, sequence)
+	if write_error != nil {
+		delete(value)
+		return "", false
+	}
+	return value, true
+}
+
 tree_action_proc :: proc(data: rawptr, selected: ^Row, action: model.Action, value: string) -> Tab_Result {
 	state := (^Tree_Tab)(data)
 	if selected == nil do return {}
@@ -229,7 +251,10 @@ tree_action_proc :: proc(data: rawptr, selected: ^Row, action: model.Action, val
 		tree_git_refresh(state)
 		return Tab_Result{rows_changed = true, message = "tree updated", root_path = state.tree.root}
 	case .Copy_Path, .Copy_Relative_Path:
-		return Tab_Result{message = selected.path}
+		path, copied := tree_copy_path(state, selected, action == .Copy_Relative_Path)
+		if !copied do return Tab_Result{message = "could not copy path"}
+		delete(path)
+		return Tab_Result{message = "path copied"}
 	case .Stage_Changes:
 		repo, message, ok := gitcore.owner_of(selected.path)
 		if !ok {

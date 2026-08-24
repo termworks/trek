@@ -145,7 +145,6 @@ nerd_font_installed :: proc() -> bool {
 	state, stdout, stderr, err := os.process_exec(os.Process_Desc{
 		command = []string{"fc-match", "-f", "%{family}", "Symbols Nerd Font"},
 	}, context.temp_allocator)
-	delete(stderr)
 	if err != nil || !state.exited || !state.success do return false
 	return strings.contains(strings.to_lower(string(stdout), context.temp_allocator), "nerd")
 }

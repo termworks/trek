@@ -328,6 +328,14 @@ changes_destroy_proc :: proc(data: rawptr) {
 	free(state, allocator)
 }
 
+changes_root_proc :: proc(data: rawptr, root: string) -> Tab_Result {
+	state := (^Changes_Tab)(data)
+	delete(state.root)
+	state.root = strings.clone(root, state.allocator)
+	changes_refresh(state)
+	return Tab_Result{rows_changed = true}
+}
+
 changes_tab :: proc(root: string, allocator := context.allocator) -> Tab {
 	state := changes_new(root, allocator)
 	return Tab{
@@ -343,5 +351,6 @@ changes_tab :: proc(root: string, allocator := context.allocator) -> Tab {
 		destroy = changes_destroy_proc,
 		on_focus = changes_focus_proc,
 		on_paste = changes_paste_proc,
+		on_root = changes_root_proc,
 	}
 }

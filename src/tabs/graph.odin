@@ -188,6 +188,14 @@ graph_destroy_proc :: proc(data: rawptr) {
 	free(state, allocator)
 }
 
+graph_root_proc :: proc(data: rawptr, root: string) -> Tab_Result {
+	state := (^Graph_Tab)(data)
+	delete(state.root)
+	state.root = strings.clone(root, state.allocator)
+	graph_refresh(state)
+	return Tab_Result{rows_changed = true}
+}
+
 graph_tab :: proc(root: string, allocator := context.allocator) -> Tab {
 	state := graph_new(root, allocator)
 	return Tab{
@@ -200,5 +208,6 @@ graph_tab :: proc(root: string, allocator := context.allocator) -> Tab {
 		on_select = graph_select_proc,
 		destroy = graph_destroy_proc,
 		on_focus = graph_focus_proc,
+		on_root = graph_root_proc,
 	}
 }

@@ -138,12 +138,12 @@ trusted_path :: proc(engine: ^Engine, path: string) -> (string, bool) {
 	if path_inside(abs, engine.root) || path_inside(abs, config_root) || path_inside(abs, engine.state_path) {
 		return abs, true
 	}
-	delete(abs)
 	return "", false
 }
 
 host_env :: proc "c" (L: ^clua.State) -> c.int {
 	context = runtime.default_context()
+	defer free_all(context.temp_allocator)
 	name := host_argument(L, 1)
 	if name == "" {
 		clua.pushnil(L)
@@ -160,13 +160,13 @@ host_env :: proc "c" (L: ^clua.State) -> c.int {
 
 host_read :: proc "c" (L: ^clua.State) -> c.int {
 	context = runtime.default_context()
+	defer free_all(context.temp_allocator)
 	engine := engine_from_state(L)
 	path, trusted := trusted_path(engine, host_argument(L, 1))
 	if !trusted {
 		clua.pushnil(L)
 		return 1
 	}
-	defer delete(path)
 	contents, err := os.read_entire_file(path, context.temp_allocator)
 	if err != nil || len(contents) > 1024 * 1024 {
 		clua.pushnil(L)
@@ -178,19 +178,18 @@ host_read :: proc "c" (L: ^clua.State) -> c.int {
 
 host_scandir :: proc "c" (L: ^clua.State) -> c.int {
 	context = runtime.default_context()
+	defer free_all(context.temp_allocator)
 	engine := engine_from_state(L)
 	path, trusted := trusted_path(engine, host_argument(L, 1))
 	if !trusted {
 		clua.pushnil(L)
 		return 1
 	}
-	defer delete(path)
 	entries, err := os.read_all_directory_by_path(path, context.temp_allocator)
 	if err != nil {
 		clua.pushnil(L)
 		return 1
 	}
-	defer os.file_info_slice_delete(entries, context.temp_allocator)
 	clua.createtable(L, c.int(min(len(entries), 4096)), 0)
 	for entry, index in entries[:min(len(entries), 4096)] {
 		clua.createtable(L, 0, 2)
@@ -205,12 +204,14 @@ host_scandir :: proc "c" (L: ^clua.State) -> c.int {
 
 host_cell_width :: proc "c" (L: ^clua.State) -> c.int {
 	context = runtime.default_context()
+	defer free_all(context.temp_allocator)
 	clua.pushinteger(L, clua.Integer(tui.text_width(host_argument(L, 1))))
 	return 1
 }
 
 host_state_dir :: proc "c" (L: ^clua.State) -> c.int {
 	context = runtime.default_context()
+	defer free_all(context.temp_allocator)
 	engine := engine_from_state(L)
 	push_string(L, engine.state_path)
 	return 1
@@ -218,6 +219,7 @@ host_state_dir :: proc "c" (L: ^clua.State) -> c.int {
 
 host_goto_tab :: proc "c" (L: ^clua.State) -> c.int {
 	context = runtime.default_context()
+	defer free_all(context.temp_allocator)
 	engine := engine_from_state(L)
 	delete(engine.pending_tab, engine.allocator)
 	engine.pending_tab = strings.clone(host_argument(L, 1), engine.allocator)
@@ -226,6 +228,7 @@ host_goto_tab :: proc "c" (L: ^clua.State) -> c.int {
 
 host_reveal :: proc "c" (L: ^clua.State) -> c.int {
 	context = runtime.default_context()
+	defer free_all(context.temp_allocator)
 	engine := engine_from_state(L)
 	delete(engine.pending_reveal, engine.allocator)
 	engine.pending_reveal = strings.clone(host_argument(L, 1), engine.allocator)
@@ -234,6 +237,7 @@ host_reveal :: proc "c" (L: ^clua.State) -> c.int {
 
 host_stage :: proc "c" (L: ^clua.State) -> c.int {
 	context = runtime.default_context()
+	defer free_all(context.temp_allocator)
 	path := host_argument(L, 1)
 	repo, message, ok := gitcore.owner_of(path)
 	delete(message)
@@ -297,6 +301,7 @@ push_exec_result :: proc(L: ^clua.State, entry: ^Exec_Entry) {
 
 host_exec :: proc "c" (L: ^clua.State) -> c.int {
 	context = runtime.default_context()
+	defer free_all(context.temp_allocator)
 	engine := engine_from_state(L)
 	argv, valid := host_argv(L, 1, engine.allocator)
 	if !valid {
@@ -344,6 +349,7 @@ host_exec :: proc "c" (L: ^clua.State) -> c.int {
 
 host_suspend :: proc "c" (L: ^clua.State) -> c.int {
 	context = runtime.default_context()
+	defer free_all(context.temp_allocator)
 	engine := engine_from_state(L)
 	argv, valid := host_argv(L, 1, engine.allocator)
 	if !valid {

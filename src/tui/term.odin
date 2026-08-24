@@ -1,6 +1,8 @@
 package tui
 
+import "base:runtime"
 import "core:c"
+import "core:fmt"
 import "core:os"
 import "core:sys/posix"
 
@@ -67,6 +69,25 @@ Terminal :: struct {
 	active: bool,
 }
 
+panic_terminal: ^Terminal
+
+terminal_assertion_failure :: proc(prefix, message: string, loc: runtime.Source_Code_Location) -> ! {
+	if panic_terminal != nil do terminal_restore(panic_terminal)
+	runtime.default_assertion_failure_proc(prefix, message, loc)
+}
+
+terminal_arm_panic_restore :: proc(terminal: ^Terminal) -> runtime.Assertion_Failure_Proc {
+	previous := context.assertion_failure_proc
+	panic_terminal = terminal
+	context.assertion_failure_proc = terminal_assertion_failure
+	return previous
+}
+
+terminal_disarm_panic_restore :: proc(previous: runtime.Assertion_Failure_Proc) {
+	context.assertion_failure_proc = previous
+	panic_terminal = nil
+}
+
 terminal_enter :: proc(terminal: ^Terminal) -> bool {
 	if terminal.active || !posix.isatty(posix.STDIN_FILENO) || !posix.isatty(posix.STDOUT_FILENO) {
 		return false
@@ -96,4 +117,14 @@ terminal_restore :: proc(terminal: ^Terminal) {
 	_, _ = os.write_string(os.stdout, "\x1b[0m\x1b[?2004l\x1b[?1006l\x1b[?1003l\x1b[?1000l\x1b[?25h\x1b[?1049l")
 	_ = posix.tcsetattr(posix.STDIN_FILENO, .TCSAFLUSH, &terminal.saved)
 	terminal.active = false
+}
+
+terminal_cursor :: proc(visible: bool, x := 0, y := 0) {
+	if !visible {
+		_, _ = os.write_string(os.stdout, "\x1b[?25l")
+		return
+	}
+	sequence := fmt.aprintf("\x1b[%d;%dH\x1b[?25h", y + 1, x + 1)
+	defer delete(sequence)
+	_, _ = os.write_string(os.stdout, sequence)
 }

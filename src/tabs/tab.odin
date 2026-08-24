@@ -54,6 +54,7 @@ Action_Proc :: proc(data: rawptr, selected: ^Row, action: model.Action, value: s
 Destroy_Proc :: proc(data: rawptr)
 Focus_Proc :: proc(data: rawptr) -> Tab_Result
 Paste_Proc :: proc(data: rawptr, value: string, selected: ^Row) -> Tab_Result
+Root_Proc :: proc(data: rawptr, root: string) -> Tab_Result
 
 Tab :: struct {
 	name:      string,
@@ -68,6 +69,7 @@ Tab :: struct {
 	destroy:   Destroy_Proc,
 	on_focus:  Focus_Proc,
 	on_paste:  Paste_Proc,
+	on_root:   Root_Proc,
 }
 
 tab_rows :: proc(tab: ^Tab, allocator := context.allocator) -> [dynamic]Row {
@@ -108,4 +110,9 @@ tab_focus :: proc(tab: ^Tab) -> Tab_Result {
 tab_paste :: proc(tab: ^Tab, value: string, selected: ^Row) -> Tab_Result {
 	if tab.on_paste == nil do return {}
 	return tab.on_paste(tab.data, value, selected)
+}
+
+tab_root :: proc(tab: ^Tab, root: string) -> Tab_Result {
+	if tab.on_root == nil do return {}
+	return tab.on_root(tab.data, root)
 }

@@ -24,6 +24,13 @@ make run
 
 `make build` produces `target/trek` and rejects a dynamically linked artifact.
 
+Focused tests can be selected without bypassing the project recipes:
+
+```sh
+make test --package git
+make test --package lua --names lua.test_lua_exec_is_a_cached_poll --threads 1
+```
+
 ## Usage
 
 ```sh
@@ -46,6 +53,63 @@ Core keys:
 
 Mouse-wheel scrolling changes only the viewport; it never moves the selected
 row. Keyboard navigation brings the selection back into view.
+
+The Explorer menu can create, rename, delete, and copy paths, change the root,
+and stage changes without crossing nested-repository boundaries. The Changes
+tab supports staging, unstaging, discarding, and committing across the root and
+child repositories. The Graph tab renders all local refs with bounded,
+colour-stable commit lanes.
+
+## Configuration
+
+`trek` loads `$TREK_C` when it is set; otherwise it reads
+`~/.config/trek/init.lua`. It never executes configuration from the directory
+being explored.
+
+```lua
+local trek = require("trek")
+
+trek.icons = "material"
+trek.hidden = false
+trek.git_decorations = true
+trek.start_tab = "tree"
+
+trek.keys.tree["ctrl+x"] = function(ctx)
+  ctx.stage(ctx.row.path)
+end
+
+trek.menu.tree["edit"] = {
+  label = "Open in editor",
+  when = function(ctx) return not ctx.row.is_dir end,
+  run = function(ctx)
+    ctx.suspend({os.getenv("EDITOR"), ctx.row.path})
+  end,
+}
+
+trek.tab("todo", {
+  icon = "T",
+  title = "TODO",
+  rows = function(ctx)
+    local result = ctx.exec({"rg", "--json", "TODO"})
+    if result == nil then return {trek.text("scanning…", {dim = true})} end
+    return {trek.text(result.stdout)}
+  end,
+})
+```
+
+Lua tabs use the same `text`, `row`, `column`, `pad`, `truncate`, `style`,
+`spacer`, `transparent`, `priority`, and `region` nodes as built-in tabs.
+`ctx.exec` is an argv-only cached poll with four workers, a five-second timeout,
+and a one MiB output limit; it never blocks a redraw. Lua can add tabs, keys,
+menus, and event handlers, but cannot replace a built-in row provider.
+
+## State
+
+Preferences and expanded directories are stored in
+`$XDG_STATE_HOME/trek/preferences.json`, or
+`~/.local/state/trek/preferences.json`. Icon selection resolves in this order:
+`TREK_ICONS`, saved preference, then a Nerd Font probe. The settings overlay
+changes the icon theme, hidden-file visibility, Git decorations, and start tab.
 
 ## License
 
