@@ -167,7 +167,7 @@ overlay_rect :: proc(overlay: ^Overlay, width, height: int) -> tui.Rect {
 	if overlay.kind == .Menu do panel_height = min(len(overlay.entries) + 2, height - 2)
 	if overlay.kind == .Settings do panel_height = min(13, height - 2)
 	x := min(2, max(width - panel_width, 0))
-	y := min(ACTIVITY_HEIGHT + HEADER_HEIGHT + 1, max(height - panel_height, 0))
+	y := min(HEADER_HEIGHT + 1, max(height - panel_height, 0))
 	return tui.Rect{x = x, y = y, width = panel_width, height = panel_height}
 }
 
@@ -194,7 +194,7 @@ overlay_render :: proc(overlay: ^Overlay, buffer: ^tui.Buffer) {
 	rect := overlay_rect(overlay, buffer.width, buffer.height)
 	x, y, width, height := rect.x, rect.y, rect.width, rect.height
 	panel := tui.PLAIN_STYLE
-	selected := tui.Style{fg = tui.DEFAULT_COLOR, bg = tui.HERDR_DARK_GRAY, attrs = {.Bold}}
+	selected := tui.Style{fg = tui.DEFAULT_COLOR, bg = tui.SELECTED_BG, attrs = {.Bold}}
 	overlay_frame(overlay, buffer, rect, tui.Style{attrs = {.Dim}})
 	switch overlay.kind {
 	case .Menu:

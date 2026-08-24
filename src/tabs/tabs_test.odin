@@ -203,7 +203,7 @@ test_source_control_rows_match_reference_shapes :: proc(t: ^testing.T) {
 	tui.buffer_clear(&buffer)
 	tui.render_node(&buffer, &layout, &button.node, tui.Rect{width = 40, height = 3}, tui.PLAIN_STYLE)
 	button_cell, _ := tui.buffer_get(&buffer, 10, 1)
-	testing.expect_value(t, button_cell.style.bg, tui.HERDR_BUTTON_BLUE)
+	testing.expect_value(t, button_cell.style.bg, tui.BUTTON_BG)
 }
 
 @(test)

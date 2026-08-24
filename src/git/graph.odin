@@ -227,7 +227,9 @@ assign_lanes :: proc(history: ^History, cap := GRAPH_LANE_CAP, allocator := cont
 		trim_lanes(&lanes)
 		graph.max_lanes = max(graph.max_lanes, len(lanes))
 		collapsed := len(lanes) < old_width || (len(parent_lanes) > 0 && parent_lanes[0] != lane)
-		if len(parent_lanes) > 1 || collapsed {
+		// With no lanes left there is nothing below to join, so a connector would draw
+		// an elbow into empty space under the root commit.
+		if len(lanes) > 0 && (len(parent_lanes) > 1 || collapsed) {
 			width := max(old_width, len(lanes))
 			append(&graph.rows, Graph_Row{
 				commit_index = -1,

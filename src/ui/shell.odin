@@ -8,7 +8,11 @@ import settings "../settings"
 import tabpkg "../tabs"
 import tui "../tui"
 
-ACTIVITY_HEIGHT :: 3
+// The activity bar is a column down the left edge, VS Code style. Each tab owns a
+// slot ACTIVITY_SLOT rows tall with its glyph on the middle row, so the icons read
+// as a spaced column rather than a stack.
+ACTIVITY_WIDTH :: 5
+ACTIVITY_SLOT :: 3
 HEADER_HEIGHT :: 1
 FOOTER_HEIGHT :: 1
 
@@ -19,6 +23,7 @@ Shell :: struct {
 	selected:   int,
 	scroll:     int,
 	hover:      int,
+	hover_tab:  int,
 	snap:       bool,
 	footer:     string,
 	overlay:    Overlay,
@@ -36,7 +41,8 @@ shell_init :: proc(shell: ^Shell, allocator := context.allocator) {
 	shell.menu_entries = make([dynamic]model.Menu_Entry, allocator)
 	shell.selected = -1
 	shell.hover = -1
-	shell.footer = strings.clone(" m / ctrl+rclick: menu", allocator)
+	shell.hover_tab = -1
+	shell.footer = strings.clone(" m / right-click: menu", allocator)
 	overlay_init(&shell.overlay, allocator)
 }
 
@@ -220,6 +226,7 @@ shell_switch_tab :: proc(shell: ^Shell, index: int) {
 	shell.selected = -1
 	shell.scroll = 0
 	shell.hover = -1
+	shell.hover_tab = -1
 	result := tabpkg.tab_focus(shell_active_tab(shell))
 	if result.message != "" do shell_set_footer(shell, result.message)
 	if result.quit do shell.quit = true
@@ -466,19 +473,20 @@ shell_mouse :: proc(shell: ^Shell, mouse: tui.Mouse_Event, width, height: int) {
 		shell_wheel(shell, 3, viewport)
 		return
 	}
-	if mouse.y == 1 {
-		if mouse.action != .Press do return
-		for &activity_tab, index in shell.tabs {
-			if activity_tab.name == "graph" do continue
-			start, end := shell_activity_bounds(shell, index)
-			if mouse.x >= start && mouse.x < end {
-				shell_switch_tab(shell, index)
+	// The activity column owns every event in its width, including hover: a tab lights
+	// up before the click lands.
+	if mouse.x < ACTIVITY_WIDTH {
+		shell.hover = -1
+		shell.hover_tab = -1
+		for _, index in shell.tabs {
+			top, bottom := shell_activity_bounds(shell, index)
+			if mouse.y >= top && mouse.y < bottom {
+				shell.hover_tab = index
+				if mouse.action == .Press do shell_switch_tab(shell, index)
 				return
 			}
 		}
-		gear := shell_gear(shell)
-		gear_width := tui.text_width(gear) + 2
-		if mouse.x >= width - gear_width && shell.preferences != nil {
+		if mouse.action == .Press && mouse.y == shell_gear_row(shell, height) && shell.preferences != nil {
 			overlay_settings(
 				&shell.overlay,
 				shell.preferences.icons,
@@ -489,7 +497,8 @@ shell_mouse :: proc(shell: ^Shell, mouse: tui.Mouse_Event, width, height: int) {
 		}
 		return
 	}
-	body_top := ACTIVITY_HEIGHT + HEADER_HEIGHT
+	shell.hover_tab = -1
+	body_top := HEADER_HEIGHT
 	if mouse.y < body_top || mouse.y >= height - FOOTER_HEIGHT do return
 	index := shell_row_at_line(shell, shell.scroll + mouse.y - body_top)
 	if mouse.action == .Move {
@@ -514,10 +523,10 @@ shell_cursor_position :: proc(shell: ^Shell, width, height: int) -> (int, int, b
 	if shell.overlay.kind != .None do return 0, 0, false
 	row := shell_selected_row(shell)
 	if row == nil || row.kind != .Commit_Box do return 0, 0, false
-	line := shell_row_top(shell, shell.selected) - shell.scroll + ACTIVITY_HEIGHT + HEADER_HEIGHT
-	if line < ACTIVITY_HEIGHT + HEADER_HEIGHT || line + 1 >= height - FOOTER_HEIGHT do return 0, 0, false
-	column := min(tui.text_width(row.input_value), max(width - 5, 0))
-	return 1 + column, line + 1, true
+	line := shell_row_top(shell, shell.selected) - shell.scroll + HEADER_HEIGHT
+	if line < HEADER_HEIGHT || line + 1 >= height - FOOTER_HEIGHT do return 0, 0, false
+	column := min(tui.text_width(row.input_value), max(width - ACTIVITY_WIDTH - 5, 0))
+	return ACTIVITY_WIDTH + 1 + column, line + 1, true
 }
 
 fill_rect :: proc(buffer: ^tui.Buffer, rect: tui.Rect, style: tui.Style) {
@@ -525,7 +534,7 @@ fill_rect :: proc(buffer: ^tui.Buffer, rect: tui.Rect, style: tui.Style) {
 }
 
 shell_viewport_height :: proc(height: int) -> int {
-	return max(height - ACTIVITY_HEIGHT - HEADER_HEIGHT - FOOTER_HEIGHT, 0)
+	return max(height - HEADER_HEIGHT - FOOTER_HEIGHT, 0)
 }
 
 shell_material_icons :: proc(shell: ^Shell) -> bool {
@@ -540,7 +549,7 @@ shell_tab_icon :: proc(shell: ^Shell, index: int) -> string {
 	switch shell.tabs[index].name {
 	case "tree": return material ? "\uf07b" : "📁"
 	case "changes": return material ? "\uf126" : "🔀"
-	case "graph": return material ? "\uea88" : "⑂"
+	case "graph": return material ? "\ue725" : "⑂"
 	}
 	return shell.tabs[index].icon
 }
@@ -550,57 +559,59 @@ shell_gear :: proc(shell: ^Shell) -> string {
 	return "⚙"
 }
 
+// Row range of a tab's slot in the activity column.
 shell_activity_bounds :: proc(shell: ^Shell, target: int) -> (int, int) {
-	x := 1
-	for &tab, index in shell.tabs {
-		if tab.name == "graph" do continue
-		icon := shell_tab_icon(shell, index)
-		slack := shell_material_icons(shell) ? 1 : 0
-		width := tui.text_width(icon) + slack + 2
-		if index == target do return x, x + width
-		x += width + 1
-	}
-	return 0, 0
+	if target < 0 || target >= len(shell.tabs) do return 0, 0
+	top := target * ACTIVITY_SLOT
+	return top, top + ACTIVITY_SLOT
+}
+
+shell_gear_row :: proc(shell: ^Shell, height: int) -> int {
+	return max(height - FOOTER_HEIGHT - 2, len(shell.tabs) * ACTIVITY_SLOT)
 }
 
 shell_draw_activity :: proc(shell: ^Shell, buffer: ^tui.Buffer) {
-	active_tab := shell_active_tab(shell)
-	for &tab, index in shell.tabs {
-		if tab.name == "graph" do continue
-		start, end := shell_activity_bounds(shell, index)
-		if start >= buffer.width do break
+	column := tui.Rect{x = 0, y = 0, width = ACTIVITY_WIDTH, height = buffer.height}
+	fill_rect(buffer, column, tui.Style{bg = tui.ACTIVITY_BG})
+	for _, index in shell.tabs {
+		top, bottom := shell_activity_bounds(shell, index)
+		if top >= buffer.height do break
 		active := index == shell.active
-		if active_tab != nil && active_tab.name == "graph" && tab.name == "changes" do active = true
-		style := tui.Style{attrs = {.Dim}}
-		if active do style = tui.Style{bg = tui.HERDR_DARK_GRAY, attrs = {.Bold}}
+		// The glyph sits on the slot's middle row; the marker spans the whole slot so
+		// the active tab reads as a bar, not a dot.
+		middle := top + ACTIVITY_SLOT / 2
 		icon := shell_tab_icon(shell, index)
-		slack := shell_material_icons(shell) ? " " : ""
-		chip := strings.concatenate([]string{" ", icon, slack, " "}, context.temp_allocator)
-		tui.buffer_draw_text(buffer, start, 1, chip, style, end - start)
-		if active {
-			cap := tui.Style{fg = tui.HERDR_DARK_GRAY, bg = tui.DEFAULT_COLOR}
-			fill_rect(buffer, tui.Rect{x = start, y = 0, width = end - start, height = 1}, cap)
-			fill_rect(buffer, tui.Rect{x = start, y = 2, width = end - start, height = 1}, cap)
-			for x in start ..< end {
-				tui.buffer_set(buffer, x, 0, tui.Cell{rune = '▄', style = cap})
-				tui.buffer_set(buffer, x, 2, tui.Cell{rune = '▀', style = cap})
-			}
+		style := tui.Style{bg = tui.ACTIVITY_BG, attrs = {.Dim}}
+		if active do style = tui.Style{fg = tui.RAMP_BRIGHT, bg = tui.ACTIVITY_BG}
+		if index == shell.hover_tab && !active do style = tui.Style{fg = tui.RAMP_TEXT, bg = tui.HOVER_BG}
+		for y in top ..< min(bottom, buffer.height) {
+			marker := tui.Style{fg = active ? tui.ACCENT : tui.ACTIVITY_BG, bg = style.bg}
+			tui.buffer_set(buffer, 0, y, tui.Cell{rune = '▌', style = marker})
+			for x in 1 ..< ACTIVITY_WIDTH do tui.buffer_set(buffer, x, y, tui.Cell{rune = ' ', style = style})
+		}
+		if middle < buffer.height {
+			width := tui.text_width(icon)
+			x := 1 + max((ACTIVITY_WIDTH - 1 - width) / 2, 0)
+			tui.buffer_draw_text(buffer, x, middle, icon, style, ACTIVITY_WIDTH - x)
 		}
 	}
-	gear := shell_gear(shell)
-	gear_text := strings.concatenate([]string{" ", gear, " "}, context.temp_allocator)
-	gear_width := tui.text_width(gear_text)
-	if gear_width <= buffer.width do tui.buffer_draw_text(buffer, buffer.width - gear_width, 1, gear_text, tui.Style{attrs = {.Dim}}, gear_width)
+	gear_y := shell_gear_row(shell, buffer.height)
+	if gear_y < buffer.height - FOOTER_HEIGHT {
+		gear := shell_gear(shell)
+		style := tui.Style{bg = tui.ACTIVITY_BG, attrs = {.Dim}}
+		x := 1 + max((ACTIVITY_WIDTH - 1 - tui.text_width(gear)) / 2, 0)
+		tui.buffer_draw_text(buffer, x, gear_y, gear, style, ACTIVITY_WIDTH - x)
+	}
 }
 
 shell_draw_header :: proc(shell: ^Shell, buffer: ^tui.Buffer, tab: ^tabpkg.Tab) {
 	heading := tabpkg.tab_heading(tab)
-	y := ACTIVITY_HEIGHT
-	x := 0
+	y := 0
+	x := ACTIVITY_WIDTH
 	if tab.name == "tree" {
 		label := strings.to_upper(heading.title, context.temp_allocator)
 		x += tui.buffer_draw_text(buffer, x, y, " ", tui.PLAIN_STYLE, 1)
-		x += tui.buffer_draw_text(buffer, x, y, label, tui.Style{fg = tui.HERDR_LIGHT_BLUE, attrs = {.Bold}}, buffer.width - x)
+		x += tui.buffer_draw_text(buffer, x, y, label, tui.Style{fg = tui.ACCENT, attrs = {.Bold}}, buffer.width - x)
 	} else {
 		x += tui.buffer_draw_text(buffer, x, y, " ▾ ", tui.Style{attrs = {.Bold}}, min(3, buffer.width))
 		x += tui.buffer_draw_text(buffer, x, y, heading.title, tui.Style{attrs = {.Bold}}, buffer.width - x)
@@ -627,16 +638,16 @@ shell_draw_header :: proc(shell: ^Shell, buffer: ^tui.Buffer, tab: ^tabpkg.Tab) 
 shell_render :: proc(shell: ^Shell, buffer: ^tui.Buffer, layout: ^tui.Layout) {
 	tui.buffer_clear(buffer)
 	tui.layout_clear(layout)
-	if buffer.width < 8 || buffer.height < ACTIVITY_HEIGHT + HEADER_HEIGHT + FOOTER_HEIGHT do return
-	selected_style := tui.Style{fg = tui.DEFAULT_COLOR, bg = tui.HERDR_DARK_GRAY, attrs = {.Bold}}
-	hover_style := tui.Style{fg = tui.DEFAULT_COLOR, bg = tui.HERDR_HOVER_BG}
+	if buffer.width < ACTIVITY_WIDTH + 8 || buffer.height < HEADER_HEIGHT + FOOTER_HEIGHT do return
+	selected_style := tui.Style{fg = tui.DEFAULT_COLOR, bg = tui.SELECTED_BG, attrs = {.Bold}}
+	hover_style := tui.Style{fg = tui.DEFAULT_COLOR, bg = tui.HOVER_BG}
 	shell_draw_activity(shell, buffer)
 	tab := shell_active_tab(shell)
 	if tab == nil do return
 	shell_draw_header(shell, buffer, tab)
-	content_x := 0
-	content_width := buffer.width
-	body_top := ACTIVITY_HEIGHT + HEADER_HEIGHT
+	content_x := ACTIVITY_WIDTH
+	content_width := buffer.width - ACTIVITY_WIDTH
+	body_top := HEADER_HEIGHT
 	footer_y := buffer.height - FOOTER_HEIGHT
 	viewport := shell_viewport_height(buffer.height)
 	total := shell_total_height(shell)
@@ -655,7 +666,7 @@ shell_render :: proc(shell: ^Shell, buffer: ^tui.Buffer, layout: ^tui.Layout) {
 		style := tui.PLAIN_STYLE
 		if shell.selected == index && shell.selected >= 0 {
 			if row.kind == .Commit_Box {
-				style = tui.Style{fg = tui.HERDR_BUTTON_BLUE}
+				style = tui.Style{fg = tui.BUTTON_BG}
 			} else {
 				style = selected_style
 			}
@@ -675,9 +686,8 @@ shell_render :: proc(shell: ^Shell, buffer: ^tui.Buffer, layout: ^tui.Layout) {
 		for y in thumb_y ..< min(thumb_y + thumb_height, footer_y) do tui.buffer_set(buffer, track_x, y, tui.Cell{rune = '┃', style = tui.PLAIN_STYLE})
 	}
 	footer_style := tui.Style{attrs = {.Dim, .Italic}}
-	footer := tui.truncate_text(shell.footer, max(content_width - 4, 0))
+	footer := tui.truncate_text(shell.footer, max(content_width - 1, 0))
 	defer delete(footer)
-	tui.buffer_draw_text(buffer, content_x, footer_y, footer, footer_style, max(content_width - 4, 0))
-	if content_width >= 3 do tui.buffer_draw_text(buffer, buffer.width - 3, footer_y, " « ", tui.Style{fg = tui.HERDR_LIGHT_BLUE, attrs = {.Bold}}, 3)
+	tui.buffer_draw_text(buffer, content_x, footer_y, footer, footer_style, max(content_width - 1, 0))
 	overlay_render(&shell.overlay, buffer)
 }

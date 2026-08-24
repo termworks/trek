@@ -63,7 +63,7 @@ tree_icon_style :: proc(icon: model.Icon) -> tui.Style {
 }
 
 status_style :: proc(letter: rune) -> tui.Style {
-	style := tui.Style{fg = tui.herdr_status_color(letter), bg = tui.DEFAULT_COLOR}
+	style := tui.Style{fg = tui.status_color(letter), bg = tui.DEFAULT_COLOR}
 	if letter == 'I' do style.attrs = {.Dim}
 	return style
 }

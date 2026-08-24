@@ -149,7 +149,7 @@ changes_commit_node :: proc(allocator: runtime.Allocator) -> tui.Node {
 		tui.text("✓ Commit"),
 		tui.spacer(),
 		tui.text("│∨"),
-	}, allocator), tui.Style{fg = tui.rgb(0xff, 0xff, 0xff), bg = tui.HERDR_BUTTON_BLUE}, allocator)
+	}, allocator), tui.Style{fg = tui.rgb(0xff, 0xff, 0xff), bg = tui.BUTTON_BG}, allocator)
 	return tui.column([]tui.Node{tui.text(""), button, tui.text("")}, allocator)
 }
 
@@ -159,7 +159,7 @@ changes_section_node :: proc(title: string, count: int, allocator: runtime.Alloc
 		tui.text(" ▾ ", tui.Style{attrs = {.Bold}}),
 		tui.text(title, tui.Style{attrs = {.Bold}}),
 		tui.spacer(),
-		tui.styled(changes_owned_text(badge), tui.Style{fg = tui.rgb(0xff, 0xff, 0xff), bg = tui.HERDR_BUTTON_BLUE}, allocator),
+		tui.styled(changes_owned_text(badge), tui.Style{fg = tui.rgb(0xff, 0xff, 0xff), bg = tui.BUTTON_BG}, allocator),
 		tui.text(" "),
 	}, allocator)
 }

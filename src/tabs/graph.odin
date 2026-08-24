@@ -89,7 +89,7 @@ graph_ref_node :: proc(ref: string, lane: int, allocator: runtime.Allocator) -> 
 	label := ref
 	if strings.has_prefix(label, "HEAD -> ") do label = label[len("HEAD -> "):]
 	color := graph_lane_style(lane).fg
-	if strings.has_prefix(label, "tag: ") do color = tui.HERDR_MODIFIED
+	if strings.has_prefix(label, "tag: ") do color = tui.STATUS_MODIFIED
 	if strings.contains(label, "origin/") do color = tui.rgb(0x6c, 0xae, 0xe4)
 	return tui.styled(tui.row([]tui.Node{
 		tui.text(" "),

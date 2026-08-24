@@ -67,7 +67,7 @@ test_shell_right_click_opens_menu :: proc(t: ^testing.T) {
 	shell_init(&shell)
 	defer shell_destroy(&shell)
 	shell_add_tab(&shell, fake_tab("one"))
-	shell_mouse(&shell, tui.Mouse_Event{x = 5, y = 4, button = 2, action = .Press}, 40, 12)
+	shell_mouse(&shell, tui.Mouse_Event{x = ACTIVITY_WIDTH + 2, y = HEADER_HEIGHT, button = 2, action = .Press}, 40, 12)
 	testing.expect_value(t, shell.selected, 0)
 	testing.expect_value(t, shell.overlay.kind, Overlay_Kind.Menu)
 }
@@ -111,13 +111,14 @@ test_shell_renders_headless_buffer :: proc(t: ^testing.T) {
 	tui.layout_init(&layout)
 	defer tui.layout_destroy(&layout)
 	shell_render(&shell, &buffer, &layout)
-	cell, ok := tui.buffer_get(&buffer, 3, ACTIVITY_HEIGHT)
+	cell, ok := tui.buffer_get(&buffer, ACTIVITY_WIDTH + 3, 0)
 	testing.expect(t, ok)
 	testing.expect_value(t, cell.rune, 'E')
 	testing.expect(t, len(layout.regions) == 0)
-	cap, cap_ok := tui.buffer_get(&buffer, 1, 0)
-	testing.expect(t, cap_ok)
-	testing.expect_value(t, cap.rune, '▄')
+	marker, marker_ok := tui.buffer_get(&buffer, 0, ACTIVITY_SLOT / 2)
+	testing.expect(t, marker_ok)
+	testing.expect_value(t, marker.rune, '▌')
+	testing.expect_value(t, marker.style.fg, tui.ACCENT)
 }
 
 @(test)
@@ -138,11 +139,11 @@ test_settings_overlay_uses_reference_frame :: proc(t: ^testing.T) {
 	testing.expect_value(t, top_left.rune, '┌')
 	testing.expect_value(t, top_right.rune, '┐')
 	testing.expect_value(t, bottom_left.rune, '└')
-	testing.expect_value(t, selected.style.bg, tui.HERDR_DARK_GRAY)
+	testing.expect_value(t, selected.style.bg, tui.SELECTED_BG)
 }
 
 @(test)
-test_graph_uses_source_control_activity_chip :: proc(t: ^testing.T) {
+test_graph_has_its_own_activity_slot :: proc(t: ^testing.T) {
 	shell: Shell
 	shell_init(&shell)
 	defer shell_destroy(&shell)
@@ -151,17 +152,23 @@ test_graph_uses_source_control_activity_chip :: proc(t: ^testing.T) {
 	shell_add_tab(&shell, fake_tab("graph"))
 	shell_switch_tab(&shell, 2)
 	buffer: tui.Buffer
-	tui.buffer_init(&buffer, 40, 10)
+	tui.buffer_init(&buffer, 40, 16)
 	defer tui.buffer_destroy(&buffer)
 	layout: tui.Layout
 	tui.layout_init(&layout)
 	defer tui.layout_destroy(&layout)
 	shell_render(&shell, &buffer, &layout)
-	changes_start, _ := shell_activity_bounds(&shell, 1)
-	cap, _ := tui.buffer_get(&buffer, changes_start, 0)
-	after, _ := tui.buffer_get(&buffer, 11, 0)
-	testing.expect_value(t, cap.rune, '▄')
-	testing.expect_value(t, after.rune, ' ')
+	// Every tab owns a slot, and only the active one carries the accent marker.
+	graph_top, graph_bottom := shell_activity_bounds(&shell, 2)
+	testing.expect_value(t, graph_top, 2 * ACTIVITY_SLOT)
+	for y in graph_top ..< graph_bottom {
+		marker, _ := tui.buffer_get(&buffer, 0, y)
+		testing.expect_value(t, marker.rune, '▌')
+		testing.expect_value(t, marker.style.fg, tui.ACCENT)
+	}
+	changes_top, _ := shell_activity_bounds(&shell, 1)
+	inactive, _ := tui.buffer_get(&buffer, 0, changes_top)
+	testing.expect(t, inactive.style.fg != tui.ACCENT)
 }
 
 @(test)
