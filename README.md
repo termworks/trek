@@ -253,6 +253,54 @@ A plugin that raises is **reported in the footer and skipped**; the ones after i
 still load. That is deliberately unlike `init.lua`, where a raise is fatal: your own
 file failing means carrying on would silently apply settings you did not ask for,
 while a third-party plugin failing must not take the tool down with it.
+
+## Answering other programs
+
+A running trek can be asked where it is standing. This is a **socket only** — trek writes no
+spawn descriptor, because its truth *is* the process: a fresh `trek` knows nothing about this
+one's root, expansion or selection, so answering from a new process would succeed while being
+wrong.
+
+```sh
+trek --serve            # bind a control socket; without this there is none
+trek --lua-api          # print the client library
+```
+
+The socket lands at `$XDG_RUNTIME_DIR/onix/trek/<pid>.sock`, the same family directory oslo
+uses, so a sibling looks in one place for every tool. The directory is `0700` and a connecting
+uid that is not the owner's is refused, using the credentials the kernel reports rather than
+anything the peer said.
+
+### The surface
+
+Small on purpose: these are facts that exist only inside a running trek. Nothing here runs a
+command — that is a decision, not an omission.
+
+| verb | |
+|---|---|
+| `cwd()` | the directory trek is showing |
+| `selection()` | the path under the cursor, or `nil` |
+| `tabs()` | the panels currently in the activity strip |
+| `session()` | `{id, root, tab, socket}` |
+| `verbs()` | every name this trek will answer |
+| `client()` | the client library, for a host that cannot shell out |
+
+### From oslo
+
+```lua
+local src  = io.popen("trek --lua-api"):read("a")
+local trek = load(src)(oslo.stream)
+local t    = trek.connect()
+print(t.cwd())
+t:close()
+```
+
+The wire is oslo's: four bytes of big-endian length, then JSON. A request is
+`{"call":name,"args":[…]}` and a reply is `{"ok":true,"n":1,"result":[…]}` — `result` is a
+*list* because a Lua function returns several things, and a family whose members disagree
+about that fails silently rather than loudly. A refused verb is a reply
+(`{"ok":false,"error":"no such call: x"}`), not a dropped connection. One connection serves
+many calls.
 ## State
 
 Preferences and expanded directories are stored in
