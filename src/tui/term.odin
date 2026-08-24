@@ -69,6 +69,13 @@ Terminal :: struct {
 	active: bool,
 }
 
+Terminal_Input_State :: enum {
+	Timeout,
+	Data,
+	Closed,
+	Failed,
+}
+
 panic_terminal: ^Terminal
 
 terminal_assertion_failure :: proc(prefix, message: string, loc: runtime.Source_Code_Location) -> ! {
@@ -100,14 +107,36 @@ terminal_enter :: proc(terminal: ^Terminal) -> bool {
 	raw.c_oflag -= {.OPOST}
 	raw.c_cflag += {.CS8}
 	raw.c_lflag -= {.ECHO, .ICANON, .IEXTEN, .ISIG}
-	raw.c_cc[.VMIN] = 0
-	raw.c_cc[.VTIME] = 1
+	raw.c_cc[.VMIN] = 1
+	raw.c_cc[.VTIME] = 0
 	if posix.tcsetattr(posix.STDIN_FILENO, .TCSAFLUSH, &raw) != .OK {
 		return false
 	}
 	terminal.active = true
 	_, err := os.write_string(os.stdout, "\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1003h\x1b[?1006h\x1b[?2004h")
 	return err == nil
+}
+
+terminal_read :: proc(input: []byte, timeout_ms := 100) -> (int, Terminal_Input_State) {
+	descriptor := posix.pollfd{
+		fd = posix.STDIN_FILENO,
+		events = {.IN},
+	}
+	ready := posix.poll(&descriptor, 1, c.int(timeout_ms))
+	if ready == 0 do return 0, .Timeout
+	if ready < 0 {
+		if posix.get_errno() == .EINTR do return 0, .Timeout
+		return 0, .Failed
+	}
+	if descriptor.revents >= {.NVAL} || descriptor.revents >= {.ERR} {
+		return 0, .Failed
+	}
+	if descriptor.revents >= {.HUP} && !(descriptor.revents >= {.IN}) {
+		return 0, .Closed
+	}
+	count, err := os.read(os.stdin, input)
+	if err != nil || count == 0 do return 0, .Closed
+	return count, .Data
 }
 
 terminal_restore :: proc(terminal: ^Terminal) {

@@ -144,9 +144,13 @@ run_tui :: proc(root: string) -> bool {
 		if !tui.buffer_flush(&buffer) do return false
 		cursor_x, cursor_y, cursor_visible := ui.shell_cursor_position(&shell, buffer.width, buffer.height)
 		tui.terminal_cursor(cursor_visible, cursor_x, cursor_y)
-		count, err := os.read(os.stdin, input[:])
-		if err != nil do return false
-		if count == 0 do continue
+		count, input_state := tui.terminal_read(input[:])
+		switch input_state {
+		case .Timeout: continue
+		case .Closed: return true
+		case .Failed: return false
+		case .Data:
+		}
 		events := tui.decoder_feed(&decoder, input[:count])
 		for event in events {
 			switch event.kind {

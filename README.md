@@ -18,11 +18,13 @@ elsewhere, prefix the same recipes with `oslo`.
 ```sh
 make build
 make test
+make smoke
 make verify
 make run
 ```
 
 `make build` produces `target/trek` and rejects a dynamically linked artifact.
+`make smoke` keeps that binary open in a PTY until delayed input arrives.
 
 Focused tests can be selected without bypassing the project recipes:
 

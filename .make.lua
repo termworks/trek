@@ -233,6 +233,31 @@ make.recipe{
 make.alias("r", "run")
 
 make.recipe{
+  name = "smoke",
+  desc = "launch in a PTY and wait for delayed input",
+  deps = { "build" },
+  run = function()
+    need("bash", "bash is required for the PTY smoke test")
+    need("script", "script from util-linux is required for the PTY smoke test")
+    local scratch = "/tmp/" .. NAME .. "-smoke"
+    local output = scratch .. "/terminal.log"
+    sh.rm("-rf", scratch)
+    sh.mkdir("-p", scratch .. "/config", scratch .. "/state")
+    local command = ("set -o pipefail; (sleep 1; printf q) | " ..
+      "env HOME=%q XDG_CONFIG_HOME=%q XDG_STATE_HOME=%q " ..
+      "script -qefc './%s .' /dev/null >%q 2>&1"):format(
+        scratch, scratch .. "/config", scratch .. "/state", BIN, output)
+    assert(oslo.run{ "bash", "-c", command }.ok,
+           "trek exited before delayed terminal input; see " .. output)
+    assert(oslo.run{ "grep", "-aF", "Explorer", output, capture = true }.ok,
+           "trek did not render the explorer; see " .. output)
+    assert(oslo.run{ "grep", "-aF", "\27[?1049l", output, capture = true }.ok,
+           "trek did not restore the terminal; see " .. output)
+    sh.rm("-rf", scratch)
+  end,
+}
+
+make.recipe{
   name = "test",
   desc = "the suite",
   params = {
@@ -319,5 +344,5 @@ make.recipe{ name = "uninstall", desc = "take it back out of $PREFIX/bin",
              run = function() sh.rm("-f", PREFIX .. "/bin/" .. NAME) end }
 
 make.recipe{ name = "verify", desc = "the whole local gate",
-             deps = { "fmt-check", "check", "test" } }
+             deps = { "fmt-check", "check", "test", "smoke" } }
 make.alias("v", "verify")
