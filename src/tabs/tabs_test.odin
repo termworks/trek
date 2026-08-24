@@ -339,3 +339,65 @@ test_changes_enter_in_message_box_commits :: proc(t: ^testing.T) {
 	testing.expect_value(t, result.message, "committed")
 	testing.expect_value(t, len(state.status.staged), 0)
 }
+
+// Explorer mode lists one directory and walks into it; tree mode unfolds in place.
+// The two must not share expanded state, or switching modes leaves phantom rows.
+@(test)
+test_explorer_mode_walks_into_directories :: proc(t: ^testing.T) {
+	root := tabs_test_root(t)
+	defer { _ = os.remove_all(root); delete(root) }
+	nested := tabs_test_join(root, "src")
+	defer delete(nested)
+	_ = os.make_directory(nested)
+	leaf := tabs_test_join(nested, "deep")
+	defer delete(leaf)
+	_ = os.make_directory(leaf)
+
+	state := tree_tab_new(root, false, true)
+	defer tree_destroy_proc(rawptr(state))
+	rows := tree_rows_proc(rawptr(state), context.allocator)
+	testing.expect_value(t, len(rows), 1)
+	src_row := rows[0]
+	testing.expect(t, src_row.is_dir)
+
+	// Entering re-roots rather than expanding, so the listing is the child's.
+	result := tree_select_proc(rawptr(state), &rows[0])
+	rows_destroy(&rows)
+	testing.expect(t, result.rows_changed)
+	testing.expect_value(t, result.root_path, nested)
+	inner := tree_rows_proc(rawptr(state), context.allocator)
+	testing.expect_value(t, len(inner), 1)
+	rows_destroy(&inner)
+
+	// And Left climbs back out.
+	up := tree_key_proc(rawptr(state), tui.Key{code = .Left}, nil)
+	testing.expect(t, up.rows_changed)
+	testing.expect_value(t, up.root_path, root)
+}
+
+@(test)
+test_explorer_mode_toggle_clears_expansion :: proc(t: ^testing.T) {
+	root := tabs_test_root(t)
+	defer { _ = os.remove_all(root); delete(root) }
+	nested := tabs_test_join(root, "src")
+	defer delete(nested)
+	_ = os.make_directory(nested)
+	child := tabs_test_join(nested, "inner")
+	defer delete(child)
+	_ = os.make_directory(child)
+
+	state := tree_tab_new(root)
+	defer tree_destroy_proc(rawptr(state))
+	rows := tree_rows_proc(rawptr(state), context.allocator)
+	_ = tree_select_proc(rawptr(state), &rows[0])
+	rows_destroy(&rows)
+	expanded := tree_rows_proc(rawptr(state), context.allocator)
+	testing.expect_value(t, len(expanded), 2)
+	rows_destroy(&expanded)
+
+	result := tree_key_proc(rawptr(state), tui.Key{code = .Rune, rune = 'a'}, nil)
+	testing.expect_value(t, result.message, "explorer mode")
+	flat := tree_rows_proc(rawptr(state), context.allocator)
+	testing.expect_value(t, len(flat), 1)
+	rows_destroy(&flat)
+}

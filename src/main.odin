@@ -14,19 +14,35 @@ import ui "./ui"
 VERSION :: "0.1.0"
 
 Options :: struct {
-	root:    string,
-	help:    bool,
-	version: bool,
-	error:   string,
+	root:      string,
+	cwd_file:  string,
+	explore:   bool,
+	help:      bool,
+	version:   bool,
+	error:     string,
 }
 
 parse_options :: proc(args: []string, default_root: string) -> Options {
 	options := Options{root = default_root}
 	have_root := false
-	for arg in args {
+	index := 0
+	for index < len(args) {
+		arg := args[index]
+		index += 1
 		switch arg {
 		case "-h", "--help": options.help = true
 		case "-V", "--version": options.version = true
+		case "-e", "--explore": options.explore = true
+		case "--cwd-file":
+			// Where trek reports the directory it finished in. A child process cannot
+			// change its parent's working directory, so a shell that wants to follow
+			// trek reads this file after it exits.
+			if index >= len(args) {
+				options.error = "--cwd-file needs a path"
+			} else {
+				options.cwd_file = args[index]
+				index += 1
+			}
 		case:
 			if strings.has_prefix(arg, "-") {
 				options.error = "unknown option"
@@ -45,10 +61,17 @@ usage :: proc() {
 	fmt.println("trek")
 	fmt.println("")
 	fmt.println("Usage:")
-	fmt.println("  trek [path] [--help] [--version]")
+	fmt.println("  trek [path] [options]")
+	fmt.println("")
+	fmt.println("Options:")
+	fmt.println("  -e, --explore        start in explorer mode (walk into directories)")
+	fmt.println("      --cwd-file PATH  write the directory trek finished in to PATH")
+	fmt.println("  -h, --help           show this help")
+	fmt.println("  -V, --version        show the version")
 	fmt.println("")
 	fmt.println("Keys:")
-	fmt.println("  ↑↓ navigate  Enter open  m menu  1-9 tabs  q quit")
+	fmt.println("  ↑↓ move   Enter open   ← parent/collapse   a explorer mode")
+	fmt.println("  . hidden  r refresh    m menu   1-9 tabs    q quit")
 }
 
 run_suspended :: proc(config: ^luaconfig.Engine, terminal: ^tui.Terminal, buffer: ^tui.Buffer) -> bool {
@@ -69,7 +92,7 @@ run_suspended :: proc(config: ^luaconfig.Engine, terminal: ^tui.Terminal, buffer
 	return true
 }
 
-run_tui :: proc(root: string) -> bool {
+run_tui :: proc(root: string, options: Options) -> bool {
 	preferences: settings.Preferences
 	settings.preferences_init(&preferences)
 	_ = settings.preferences_load(&preferences)
@@ -114,7 +137,16 @@ run_tui :: proc(root: string) -> bool {
 	ui.shell_set_config(&shell, &config)
 	ui.shell_set_preferences(&shell, &preferences)
 	defer ui.shell_save_preferences(&shell)
-	ui.shell_add_tab(&shell, tabs.tree_tab(root, preferences.hidden))
+	ui.shell_add_tab(&shell, tabs.tree_tab(root, preferences.hidden, options.explore))
+	// Report where the user finished. A child process cannot change its parent's
+	// working directory, so this file is the only way a shell can follow trek. It is
+	// written on every exit path, which is why it is a defer rather than a line at the
+	// end of the loop.
+	defer if options.cwd_file != "" {
+		if _, final_root, _, ok := tabs.tree_state(ui.shell_tree_tab(&shell)); ok {
+			_ = os.write_entire_file_from_string(options.cwd_file, final_root)
+		}
+	}
 	_ = tabs.tree_restore_expanded(ui.shell_active_tab(&shell), settings.preferences_expanded(&preferences, root))
 	ui.shell_reload(&shell)
 	ui.shell_add_tab(&shell, tabs.changes_tab(root))
@@ -212,5 +244,5 @@ main :: proc() {
 		os.exit(1)
 	}
 	os.file_info_delete(info, context.allocator)
-	if !run_tui(root) do os.exit(1)
+	if !run_tui(root, options) do os.exit(1)
 }

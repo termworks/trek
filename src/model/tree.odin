@@ -34,6 +34,9 @@ Tree :: struct {
 	expanded:    [dynamic]string,
 	cache:       [dynamic]Cached_Listing,
 	show_hidden: bool,
+	// Explorer mode: list only the current directory and never descend, so entering
+	// a folder re-roots the tree instead of unfolding it in place.
+	flat:        bool,
 	allocator:   runtime.Allocator,
 }
 
@@ -177,7 +180,7 @@ tree_walk :: proc(tree: ^Tree, dir: string, depth: int, trail: []bool, rows: ^[d
 	}
 	for entry, index in visible {
 		path, _ := filepath.join([]string{dir, entry.name}, tree.allocator)
-		expanded := entry.is_dir && tree_is_expanded(tree, path)
+		expanded := entry.is_dir && !tree.flat && tree_is_expanded(tree, path)
 		last := index == len(visible) - 1
 		ancestors := make([]bool, len(trail), tree.allocator)
 		copy(ancestors, trail)
@@ -190,7 +193,7 @@ tree_walk :: proc(tree: ^Tree, dir: string, depth: int, trail: []bool, rows: ^[d
 			is_last = last,
 			ancestors = ancestors,
 		})
-		if expanded {
+		if expanded && !tree.flat {
 			// A row's own connector already shows its relationship to its parent, so
 			// the ancestor columns start one level up: top-level children carry none.
 			child_trail: []bool

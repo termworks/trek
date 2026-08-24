@@ -12,10 +12,11 @@ Tree_Tab :: struct {
 	tree: model.Tree,
 }
 
-tree_tab_new :: proc(root: string, show_hidden := false, allocator := context.allocator) -> ^Tree_Tab {
+tree_tab_new :: proc(root: string, show_hidden := false, explore := false, allocator := context.allocator) -> ^Tree_Tab {
 	state := new(Tree_Tab, allocator)
 	model.tree_init(&state.tree, root, allocator)
 	state.tree.show_hidden = show_hidden
+	state.tree.flat = explore
 	return state
 }
 
@@ -88,8 +89,31 @@ tree_rows_proc :: proc(data: rawptr, allocator: runtime.Allocator) -> [dynamic]R
 	return rows
 }
 
+// Re-root the tree somewhere else, keeping the explorer mode and hidden-file choice.
+tree_reroot :: proc(state: ^Tree_Tab, path: string) -> Tab_Result {
+	flat := state.tree.flat
+	hidden := state.tree.show_hidden
+	allocator := state.tree.allocator
+	root := strings.clone(path, allocator)
+	defer delete(root, allocator)
+	model.tree_destroy(&state.tree)
+	model.tree_init(&state.tree, root, allocator)
+	state.tree.flat = flat
+	state.tree.show_hidden = hidden
+	return Tab_Result{rows_changed = true, root_path = state.tree.root, open_path = state.tree.root}
+}
+
+// The parent of the current root, or nothing when already at the filesystem top.
+tree_parent :: proc(state: ^Tree_Tab) -> Tab_Result {
+	parent := filepath.dir(state.tree.root, context.temp_allocator)
+	if parent == "" || parent == state.tree.root do return Tab_Result{message = "already at the top"}
+	return tree_reroot(state, parent)
+}
+
 tree_selected_toggle :: proc(state: ^Tree_Tab, selected: ^Row) -> Tab_Result {
 	if selected == nil || !selected.is_dir do return {}
+	// Explorer mode walks into a directory; tree mode unfolds it where it stands.
+	if state.tree.flat do return tree_reroot(state, selected.path)
 	model.tree_toggle(&state.tree, selected.path)
 	return Tab_Result{rows_changed = true, open_path = selected.path}
 }
@@ -101,15 +125,27 @@ tree_select_proc :: proc(data: rawptr, selected: ^Row) -> Tab_Result {
 tree_key_proc :: proc(data: rawptr, key: tui.Key, selected: ^Row) -> Tab_Result {
 	state := (^Tree_Tab)(data)
 	if key.code == .Enter || key.code == .Right {
-		if selected != nil && selected.is_dir && !selected.expanded do return tree_selected_toggle(state, selected)
+		if selected != nil && selected.is_dir && (state.tree.flat || !selected.expanded) {
+			return tree_selected_toggle(state, selected)
+		}
 		if key.code == .Enter do return tree_selected_toggle(state, selected)
 	}
-	if key.code == .Left && selected != nil && selected.is_dir && selected.expanded do return tree_selected_toggle(state, selected)
+	if key.code == .Left {
+		// In explorer mode Left is "go up"; in tree mode it folds the row back.
+		if state.tree.flat do return tree_parent(state)
+		if selected != nil && selected.is_dir && selected.expanded do return tree_selected_toggle(state, selected)
+	}
+	if key.code == .Backspace && state.tree.flat do return tree_parent(state)
 	if key.code != .Rune do return {}
 	switch key.rune {
 	case '.':
 		state.tree.show_hidden = !state.tree.show_hidden
 		return Tab_Result{rows_changed = true, message = "hidden files toggled"}
+	case 'a':
+		state.tree.flat = !state.tree.flat
+		model.tree_collapse_all(&state.tree)
+		model.tree_refresh(&state.tree)
+		return Tab_Result{rows_changed = true, message = state.tree.flat ? "explorer mode" : "tree mode"}
 	case 'r':
 		model.tree_refresh(&state.tree)
 		return Tab_Result{rows_changed = true, message = "tree refreshed"}
@@ -222,15 +258,19 @@ tree_destroy_proc :: proc(data: rawptr) {
 
 tree_heading_proc :: proc(data: rawptr) -> Tab_Heading {
 	state := (^Tree_Tab)(data)
+	// Explorer mode moves between directories, so the full path is the context that
+	// matters; tree mode stays rooted and only needs the folder name.
+	if state.tree.flat do return Tab_Heading{title = state.tree.root}
 	return Tab_Heading{title = filepath.base(state.tree.root)}
 }
 
 tree_tab :: proc(
 	root: string,
 	show_hidden := false,
+	explore := false,
 	allocator := context.allocator,
 ) -> Tab {
-	state := tree_tab_new(root, show_hidden, allocator)
+	state := tree_tab_new(root, show_hidden, explore, allocator)
 	return Tab{
 		name = "tree",
 		title = "Explorer",

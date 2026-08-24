@@ -4,6 +4,9 @@
 It provides an Explorer-style tree, a changes view, a commit graph, and a Lua
 configuration layer in one tabbed interface.
 
+`trek` starts in tree mode and can switch to a directory-at-a-time explorer
+mode, which lets it stand in for a shell's built-in directory browser.
+
 The tree and interface are derived from
 [herdr-sidebar](https://github.com/alexarthurs/herdr-sidebar), with the herdr
 multiplexer integration removed. The node vocabulary follows pixy. See
@@ -36,32 +39,84 @@ make test --package lua --names lua.test_lua_exec_is_a_cached_poll --threads 1
 ## Usage
 
 ```sh
-trek [path]
+trek [path] [options]
 ```
+
+| option | |
+|---|---|
+| `-e`, `--explore` | start in explorer mode |
+| `--cwd-file PATH` | write the directory trek finished in to `PATH` |
+| `-h`, `--help` | show help |
+| `-V`, `--version` | show the version |
 
 Core keys:
 
 | key | action |
 |---|---|
 | `↑` / `↓` | move selection |
-| `Enter` | expand or collapse a directory |
+| `Enter` / `→` | open a directory |
+| `←` | parent directory, or collapse |
+| `a` | switch between tree and explorer mode |
 | `.` | toggle hidden files |
-| `i` | toggle icon theme |
 | `r` | refresh directory listings |
+| `c` | collapse every folder |
 | `m` / right click | open the context menu |
 | `1`…`9` | switch tabs |
-| `s` / `,` | open settings |
 | `q` | quit |
 
 Mouse-wheel scrolling changes only the viewport; it never moves the selected
 row. Keyboard navigation brings the selection back into view.
 
+### Two ways to move
+
+**Tree mode** is the default: a directory unfolds where it stands, with indent
+guides showing the nesting, and the root never changes.
+
+**Explorer mode** (`a`, or `--explore`) lists one directory at a time. `Enter`
+walks into a folder and re-roots the view there, `←` goes back up, and the
+header shows the full path rather than the folder name. Nothing is nested, so
+there are no guides and no expanded state to keep.
+
+### Following trek from a shell
+
+A child process cannot change its parent's working directory, which is why
+shells that ship a directory browser build it in. `--cwd-file` closes that gap:
+trek writes the directory it finished in, and the caller reads it back.
+
+```sh
+trek_cd() {
+  local out; out="$(mktemp)"
+  trek --explore --cwd-file "$out" "$@"
+  local dir; dir="$(cat "$out")"; rm -f "$out"
+  [ -n "$dir" ] && cd "$dir"
+}
+```
+
+In [oslo](https://github.com/termworks/oslo) the same thing is a Lua builtin,
+so trek can stand in for the built-in `nav`:
+
+```lua
+oslo.register_builtin{
+  name = "nav",
+  run = function(argv, shell)
+    local tmp <close> = oslo.fs.mktempdir()
+    local out = tmp .. "/cwd"
+    oslo.run{ "trek", "--explore", "--cwd-file", out, argv[2] or "." }
+    local dir = oslo.fs.read(out)
+    if dir and dir ~= "" then oslo.sys.cd(dir) end
+    return 0
+  end,
+}
+```
+
+The file is written on every exit path, and is left untouched when trek cannot
+start — so a caller that reads an empty or missing file should simply not move.
+
 The Explorer menu can create, rename, delete, and copy paths, change the root,
 and stage changes without crossing nested-repository boundaries. The Changes
-tab supports staging, unstaging, discarding, and committing across the root and
-child repositories. The Graph tab renders all local refs with bounded,
-colour-stable commit lanes.
-
+tab lists NEW, MODIFIED, and STAGED files; `Enter` moves a file between
+unstaged and staged, and the commit box commits what is staged. The Graph tab
+renders all local refs with bounded, colour-stable commit lanes.
 ## Configuration
 
 `trek` loads `$TREK_C` when it is set; otherwise it reads
@@ -71,9 +126,7 @@ being explored.
 ```lua
 local trek = require("trek")
 
-trek.icons = "material"
 trek.hidden = false
-trek.git_decorations = true
 trek.start_tab = "tree"
 
 trek.keys.tree["ctrl+x"] = function(ctx)
@@ -109,9 +162,9 @@ menus, and event handlers, but cannot replace a built-in row provider.
 
 Preferences and expanded directories are stored in
 `$XDG_STATE_HOME/trek/preferences.json`, or
-`~/.local/state/trek/preferences.json`. Icon selection resolves in this order:
-`TREK_ICONS`, saved preference, then a Nerd Font probe. The settings overlay
-changes the icon theme, hidden-file visibility, Git decorations, and start tab.
+`~/.local/state/trek/preferences.json`. Hidden-file visibility, the expanded
+set, and the start tab persist between runs. Icons are always the Nerd Font set;
+there is no second theme and no settings overlay.
 
 ## License
 

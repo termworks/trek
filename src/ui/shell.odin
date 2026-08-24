@@ -561,7 +561,10 @@ shell_draw_header :: proc(shell: ^Shell, buffer: ^tui.Buffer, tab: ^tabpkg.Tab) 
 	y := 0
 	x := ACTIVITY_WIDTH + CONTENT_GUTTER
 	if tab.name == "tree" {
-		label := strings.to_upper(heading.title, context.temp_allocator)
+		// A bare folder name is a label and reads well upper-cased; a full path is not,
+		// and upper-casing it mangles case-sensitive directory names.
+		label := heading.title
+		if !strings.contains(label, "/") do label = strings.to_upper(label, context.temp_allocator)
 		x += tui.buffer_draw_text(buffer, x, y, " ", tui.PLAIN_STYLE, 1)
 		x += tui.buffer_draw_text(buffer, x, y, label, tui.Style{fg = tui.ACCENT, attrs = {.Bold}}, buffer.width - x)
 	} else {
