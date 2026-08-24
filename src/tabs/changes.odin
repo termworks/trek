@@ -121,7 +121,6 @@ changes_message_node :: proc(state: ^Changes_Tab, view: ^Changes_Repo, allocator
 		placeholder := fmt.aprintf("Message (⏎ to commit on \"%s\")", view.status.branch, allocator = allocator)
 		content = changes_owned_text(placeholder, tui.Style{attrs = {.Dim, .Italic}})
 	}
-	sparkle := state.theme == .Material ? "\U000f0674 " : "✧ "
 	return tui.column([]tui.Node{
 		tui.row([]tui.Node{
 			tui.text("┌", border),
@@ -132,7 +131,6 @@ changes_message_node :: proc(state: ^Changes_Tab, view: ^Changes_Repo, allocator
 			tui.text("│", border),
 			tui.priority(tui.truncate(content, 0), 0, allocator),
 			tui.spacer(),
-			tui.text(sparkle),
 			tui.text("│", border),
 		}, allocator),
 		tui.row([]tui.Node{
