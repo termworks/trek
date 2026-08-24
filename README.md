@@ -284,6 +284,8 @@ command — that is a decision, not an omission.
 | `session()` | `{id, root, tab, socket}` |
 | `verbs()` | every name this trek will answer |
 | `client()` | the client library, for a host that cannot shell out |
+| `subscribe(event)` | push when trek moves; returns an id |
+| `unsubscribe(id)` | stop pushing |
 
 ### From oslo
 
@@ -301,6 +303,39 @@ The wire is oslo's: four bytes of big-endian length, then JSON. A request is
 about that fails silently rather than loudly. A refused verb is a reply
 (`{"ok":false,"error":"no such call: x"}`), not a dropped connection. One connection serves
 many calls.
+
+### Events
+
+trek can push when it moves, instead of being asked. Two events, both things a sibling cannot
+observe any other way:
+
+| event | fires when |
+|---|---|
+| `root` | trek re-roots — walking into or out of a directory |
+| `selection` | the cursor moves onto a different row |
+
+```lua
+local t = trek.connect()
+
+t:subscribe("root", function(path) oslo.sys.cd(path) end)
+
+while working do
+  t:poll()        -- delivers whatever arrived, here, at a moment you picked
+end
+```
+
+**A function cannot cross a socket**, so `subscribe` hands back an opaque id and the handler
+stays on your side. A push is `{"event":"root","sub":1,"args":[…]}` — it carries `event` where
+a reply carries `ok`, and that one difference is the whole reentrancy contract:
+
+> An event can arrive while a call is outstanding, because trek pushes when it moves rather
+> than when it is asked. `call` therefore reads frames until it finds its *reply* and parks any
+> event it passes on the way. Nothing is dispatched from inside a call — a handler running
+> there could call back into the session it is suspended in, and neither side has an answer for
+> that. `poll` delivers the parked events afterwards, at a moment the caller chose.
+
+A subscriber that stops reading is dropped rather than buffered without end, and a connection
+is capped at eight subscriptions, so one peer cannot grow trek's memory by ignoring it.
 ## State
 
 Preferences and expanded directories are stored in

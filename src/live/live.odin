@@ -37,9 +37,16 @@ Snapshot :: struct {
 }
 
 Connection :: struct {
-	fd:      posix.FD,
-	pending: [dynamic]byte,
-	open:    bool,
+	fd:       posix.FD,
+	pending:  [dynamic]byte,
+	// Buffered because the fd is non-blocking: a direct send can write half a frame and
+	// corrupt every frame after it, and blocking until it drains would suspend the ui.
+	outgoing: [dynamic]byte,
+	// The events this peer asked for, by the opaque id it was handed. Functions cannot
+	// cross a socket, so a subscription is a number the peer stores and trek pushes to.
+	subs:     map[int]string,
+	next_sub: int,
+	open:     bool,
 }
 
 Server :: struct {
@@ -169,12 +176,26 @@ frame_length :: proc(header: []byte) -> int {
 	return int(header[0]) << 24 | int(header[1]) << 16 | int(header[2]) << 8 | int(header[3])
 }
 
-write_frame :: proc(fd: posix.FD, body: string) {
+// Queue a frame. Nothing is sent here; flush_outgoing does that when the socket will take it.
+queue_frame :: proc(connection: ^Connection, body: string) {
 	header := [4]byte{
 		byte(len(body) >> 24), byte(len(body) >> 16), byte(len(body) >> 8), byte(len(body)),
 	}
-	posix.send(fd, raw_data(header[:]), 4, {})
-	if len(body) > 0 do posix.send(fd, raw_data(body), uint(len(body)), {})
+	append(&connection.outgoing, ..header[:])
+	append(&connection.outgoing, ..transmute([]byte)body)
+}
+
+// Push what the socket will take and keep the rest. A peer that has stopped reading fills
+// its buffer and is dropped rather than allowed to stall the loop that draws the screen.
+flush_outgoing :: proc(connection: ^Connection) -> bool {
+	for len(connection.outgoing) > 0 {
+		count := posix.send(connection.fd, raw_data(connection.outgoing[:]), uint(len(connection.outgoing)), {})
+		if count <= 0 do break
+		remaining := len(connection.outgoing) - int(count)
+		copy(connection.outgoing[:], connection.outgoing[int(count):])
+		resize(&connection.outgoing, remaining)
+	}
+	return len(connection.outgoing) <= MAX_RESPONSE
 }
 
 Request :: struct {
@@ -200,6 +221,8 @@ poll :: proc(server: ^Server, snapshot: Snapshot) {
 			if connection.open do continue
 			connection.fd = fd
 			connection.pending = make([dynamic]byte, server.allocator)
+			connection.outgoing = make([dynamic]byte, server.allocator)
+			connection.subs = make(map[int]string, server.allocator)
 			connection.open = true
 			placed = true
 			break
@@ -217,6 +240,7 @@ poll :: proc(server: ^Server, snapshot: Snapshot) {
 		// A connection serves more than one request: a client that holds one open is the
 		// obvious way to write one, and closing after each reply kills it on its second call.
 		for serve_one(&connection, snapshot) {}
+		if !flush_outgoing(&connection) do close_connection(&connection)
 	}
 }
 
@@ -234,6 +258,9 @@ read_available :: proc(connection: ^Connection) -> bool {
 close_connection :: proc(connection: ^Connection) {
 	posix.close(connection.fd)
 	delete(connection.pending)
+	delete(connection.outgoing)
+	for _, event in connection.subs do delete(event)
+	delete(connection.subs)
 	connection^ = {}
 }
 
@@ -248,8 +275,8 @@ serve_one :: proc(connection: ^Connection, snapshot: Snapshot) -> bool {
 	}
 	if len(connection.pending) < FRAME_HEADER + length do return false
 	body := string(connection.pending[FRAME_HEADER:][:length])
-	reply := dispatch(body, snapshot, context.temp_allocator)
-	write_frame(connection.fd, reply)
+	reply := dispatch(connection, body, snapshot, context.temp_allocator)
+	queue_frame(connection, reply)
 	remaining := len(connection.pending) - FRAME_HEADER - length
 	copy(connection.pending[:], connection.pending[FRAME_HEADER + length:])
 	resize(&connection.pending, remaining)
@@ -259,7 +286,15 @@ serve_one :: proc(connection: ^Connection, snapshot: Snapshot) -> bool {
 // The whole vocabulary, on one screen. Plural-for-all, singular-for-one, matching the rest
 // of the family. `verbs` ships from the first version: a client written against a tool that
 // has it gets "no such call: verbs" from one that does not, and the family stops being one.
-VERBS := []string{"verbs", "session", "cwd", "selection", "tabs", "client"}
+VERBS := []string{"verbs", "session", "cwd", "selection", "tabs", "client", "subscribe", "unsubscribe"}
+
+// The events trek actually has, not a taxonomy invented for the wire. Both are things a
+// sibling cannot observe any other way: where a running trek moved to, and what it moved onto.
+EVENTS := []string{"root", "selection"}
+
+// A subscriber that stops reading is dropped rather than buffered without end, and this is
+// the number that decides when. One peer must not be able to grow trek's memory by ignoring it.
+MAX_SUBSCRIPTIONS :: 8
 
 // The client stub trek ships, handed out over the API as well as on stdout: a sandboxed VM
 // with no io.popen cannot run `trek --lua-api`, and this is the only way it can fetch the
@@ -331,7 +366,7 @@ string_list :: proc(values: []string, allocator := context.allocator) -> string 
 	return strings.to_string(builder)
 }
 
-dispatch :: proc(body: string, snapshot: Snapshot, allocator := context.allocator) -> string {
+dispatch :: proc(connection: ^Connection, body: string, snapshot: Snapshot, allocator := context.allocator) -> string {
 	parsed, err := json.parse_string(body, allocator = context.temp_allocator)
 	if err != nil do return error_reply("malformed request", allocator)
 	object, is_object := parsed.(json.Object)
@@ -365,8 +400,120 @@ dispatch :: proc(body: string, snapshot: Snapshot, allocator := context.allocato
 		json_escape(socket_path(context.temp_allocator), &builder)
 		strings.write_string(&builder, "}")
 		return ok_reply({strings.to_string(builder)}, allocator)
+	case "subscribe":
+		// The peer gets back an opaque id, not a handle to anything. Functions cannot cross
+		// a socket, so this number is the whole of what it stores and what trek pushes to.
+		event_value, has_event := object["args"]
+		name_of_event := ""
+		if has_event {
+			if list, is_list := event_value.(json.Array); is_list && len(list) > 0 {
+				if text, is_text := list[0].(json.String); is_text do name_of_event = string(text)
+			}
+		}
+		if !known_event(name_of_event) {
+			return error_reply(fmt.tprintf("no such event: %s", name_of_event), allocator)
+		}
+		if len(connection.subs) >= MAX_SUBSCRIPTIONS {
+			return error_reply("too many subscriptions on this connection", allocator)
+		}
+		connection.next_sub += 1
+		connection.subs[connection.next_sub] = strings.clone(name_of_event, context.allocator)
+		return ok_reply({fmt.tprintf("%d", connection.next_sub)}, allocator)
+	case "unsubscribe":
+		id_value, has_id := object["args"]
+		id := -1
+		if has_id {
+			if list, is_list := id_value.(json.Array); is_list && len(list) > 0 {
+				// JSON has one number type, so a plain `1` can arrive either way depending on
+				// the parser's spec. Accepting only one of them silently ignores half the callers.
+				#partial switch number in list[0] {
+				case json.Integer: id = int(number)
+				case json.Float:   id = int(number)
+				}
+			}
+		}
+		if existing, found := connection.subs[id]; found {
+			delete(existing)
+			delete_key(&connection.subs, id)
+			return ok_reply({"true"}, allocator)
+		}
+		return ok_reply({"false"}, allocator)
 	case "client":
 		return ok_reply({quoted(string(CLIENT_SOURCE), context.temp_allocator)}, allocator)
 	}
 	return error_reply(fmt.tprintf("no such call: %s", string(name)), allocator)
+}
+
+known_event :: proc(name: string) -> bool {
+	for event in EVENTS do if event == name do return true
+	return false
+}
+
+// A push, distinguished from a reply by carrying `event` where a reply carries `ok`. That is
+// the whole reentrancy contract on the wire: a client waiting for a reply can tell an event
+// from its answer without guessing, queue it, and deliver it when it chooses rather than
+// re-entering its own call.
+event_frame :: proc(id: int, name, value: string, allocator := context.allocator) -> string {
+	builder := strings.builder_make(allocator)
+	strings.write_string(&builder, "{\"event\":")
+	json_escape(name, &builder)
+	strings.write_string(&builder, ",\"sub\":")
+	strings.write_string(&builder, fmt.tprintf("%d", id))
+	strings.write_string(&builder, ",\"args\":[")
+	if value == "" {
+		strings.write_string(&builder, "null")
+	} else {
+		json_escape(value, &builder)
+	}
+	strings.write_string(&builder, "]}")
+	return strings.to_string(builder)
+}
+
+// Fan one event out to whoever asked for it. Nothing is sent here either: frames are queued
+// and flushed on the next poll, so emitting can never block the caller.
+emit :: proc(server: ^Server, name, value: string) {
+	if !server.listening do return
+	for &connection in server.connections {
+		if !connection.open do continue
+		for id, subscribed in connection.subs {
+			if subscribed != name do continue
+			queue_frame(&connection, event_frame(id, name, value, context.temp_allocator))
+		}
+	}
+}
+
+// State the host last told us about, so a change can be noticed without the ui knowing that
+// anything is listening.
+Watch :: struct {
+	root:      string,
+	selection: string,
+	primed:    bool,
+}
+
+// Compare this poll's snapshot with the last and push what moved. Deriving events here rather
+// than calling emit from the ui keeps the socket out of the drawing path entirely.
+notice :: proc(server: ^Server, watch: ^Watch, snapshot: Snapshot, allocator := context.allocator) {
+	if !server.listening do return
+	if !watch.primed {
+		watch.root = strings.clone(snapshot.root, allocator)
+		watch.selection = strings.clone(snapshot.selection, allocator)
+		watch.primed = true
+		return
+	}
+	if snapshot.root != watch.root {
+		delete(watch.root, allocator)
+		watch.root = strings.clone(snapshot.root, allocator)
+		emit(server, "root", watch.root)
+	}
+	if snapshot.selection != watch.selection {
+		delete(watch.selection, allocator)
+		watch.selection = strings.clone(snapshot.selection, allocator)
+		emit(server, "selection", watch.selection)
+	}
+}
+
+watch_destroy :: proc(watch: ^Watch, allocator := context.allocator) {
+	delete(watch.root, allocator)
+	delete(watch.selection, allocator)
+	watch^ = {}
 }

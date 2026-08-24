@@ -221,12 +221,16 @@ run_tui :: proc(root: string, options: Options) -> bool {
 		}
 	}
 	defer live.stop(&server)
+	watch: live.Watch
+	defer live.watch_destroy(&watch)
 
 	input: [4096]byte
 	for !shell.quit && !tui.terminal_should_exit() {
 		free_all(context.temp_allocator)
 		if luaconfig.engine_poll(&config) do ui.shell_reload(&shell)
-		live.poll(&server, live_snapshot(&shell))
+		live_state := live_snapshot(&shell)
+		live.notice(&server, &watch, live_state)
+		live.poll(&server, live_state)
 		if tui.terminal_take_resize() {
 			if new_width, new_height, resized := tui.terminal_size(); resized {
 				tui.buffer_resize(&buffer, new_width, new_height)

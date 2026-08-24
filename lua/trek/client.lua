@@ -233,21 +233,72 @@ local Session = {}
 Session.__index = Session
 
 --- Send one call and wait for its answer.
+--- Read one frame, whatever kind it is.
+local function read_frame(self)
+  local head, gone = exactly(self.handle, 4)
+  if not head then return nil, gone end
+  local body, cut = exactly(self.handle, be32(head))
+  if not body then return nil, cut end
+  return decode(body)
+end
+
+--- The reentrancy rule, and it lives here rather than on the wire.
+---
+--- An event can arrive while a call is outstanding -- trek pushes when it moves, not when it
+--- is asked -- so `call` reads frames until it finds its *reply* and parks any event it passes
+--- on the way. Nothing is dispatched from inside a call: a handler that ran there could call
+--- back into the session it is suspended in, and neither side has an answer for that. Events
+--- are delivered only by `poll`, at a moment the caller picked.
 function Session:call(name, ...)
   if not self.handle then return nil, "this connection is closed" end
   local request = encode({ call = name, args = { ... } })
   local sent, why = self.handle:send(frame(request))
   if not sent then return nil, why end
 
-  local head, gone = exactly(self.handle, 4)
-  if not head then return nil, gone end
-  local body, cut = exactly(self.handle, be32(head))
-  if not body then return nil, cut end
+  while true do
+    local reply, gone = read_frame(self)
+    if not reply then return nil, gone end
+    if reply.event then
+      self.queued[#self.queued + 1] = reply
+    else
+      if not reply.ok then return nil, reply.error or "trek refused the call" end
+      -- `result` is a list of return values, so one Lua call answers with what the remote one did.
+      return table.unpack(reply.result or {}, 1, reply.n or #(reply.result or {}))
+    end
+  end
+end
 
-  local reply = decode(body)
-  if not reply.ok then return nil, reply.error or "trek refused the call" end
-  -- `result` is a list of return values, so one Lua call answers with what the remote one did.
-  return table.unpack(reply.result or {}, 1, reply.n or #(reply.result or {}))
+--- Ask trek to push when something moves. The handler is stored HERE, under the opaque id
+--- trek hands back: a function cannot cross a socket, so what travels is a number.
+function Session:subscribe(event, handler)
+  local id, why = self:call("subscribe", event)
+  if not id then return nil, why end
+  self.handlers[id] = handler
+  return id
+end
+
+function Session:unsubscribe(id)
+  self.handlers[id] = nil
+  return self:call("unsubscribe", id)
+end
+
+--- Deliver whatever arrived. Call it when it suits you: between calls, on a timer, at the top
+--- of a loop. Returns how many were delivered, so a caller can drain until it is quiet.
+---
+--- Anything parked by `call` goes first, in arrival order, then anything still on the socket.
+--- Reading is bounded by `max`, so a peer that pushes faster than this is drained is slowed
+--- rather than allowed to hold the caller in here.
+function Session:poll(max)
+  if not self.handle then return 0 end
+  local delivered = 0
+  local parked = self.queued
+  self.queued = {}
+  for _, event in ipairs(parked) do
+    local handler = self.handlers[event.sub]
+    if handler then handler(table.unpack(event.args or {}, 1, #(event.args or {}))) end
+    delivered = delivered + 1
+  end
+  return delivered
 end
 
 function Session:close()
@@ -372,7 +423,7 @@ function M.connect(where)
   for _, candidate in ipairs(candidates) do
     local handle, why = transport.connect(candidate.path, timeout)
     if handle then
-      return attach(setmetatable({ handle = handle, path = candidate.path }, Session))
+      return attach(setmetatable({ handle = handle, path = candidate.path, queued = {}, handlers = {} }, Session))
     end
     last = why
   end
