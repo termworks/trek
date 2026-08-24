@@ -63,14 +63,9 @@ tree_icon_style :: proc(icon: model.Icon) -> tui.Style {
 }
 
 status_style :: proc(letter: rune) -> tui.Style {
-	switch letter {
-	case 'M': return tui.Style{fg = tui.rgb(0xe2, 0xc0, 0x8d), bg = tui.DEFAULT_COLOR}
-	case 'U', 'A', 'R', 'C': return tui.Style{fg = tui.rgb(0x73, 0xc9, 0x91), bg = tui.DEFAULT_COLOR}
-	case 'D': return tui.Style{fg = tui.rgb(0xc7, 0x4e, 0x39), bg = tui.DEFAULT_COLOR}
-	case '!': return tui.Style{fg = tui.rgb(0xe4, 0x67, 0x6b), bg = tui.DEFAULT_COLOR}
-	case 'I': return tui.Style{fg = tui.rgb(0x6b, 0x6b, 0x6b), bg = tui.DEFAULT_COLOR, attrs = {.Dim}}
-	}
-	return tui.PLAIN_STYLE
+	style := tui.Style{fg = tui.herdr_status_color(letter), bg = tui.DEFAULT_COLOR}
+	if letter == 'I' do style.attrs = {.Dim}
+	return style
 }
 
 status_text :: proc(letter: rune) -> string {
@@ -93,17 +88,17 @@ tree_row_node :: proc(
 	has_status: bool,
 	allocator: runtime.Allocator,
 ) -> tui.Node {
-	chevron := " "
+	chevron := "  "
 	if row.is_dir {
 		if row.expanded {
-			chevron = "⌄"
+			chevron = "▾ "
 		} else {
-			chevron = "›"
+			chevron = "▸ "
 		}
 	}
 	icon := model.file_icon(state.theme, row.name, row.is_dir, row.expanded)
 	name_style := tui.PLAIN_STYLE
-	if has_status && letter == 'I' do name_style = status_style(letter)
+	if has_status do name_style = status_style(letter)
 	marker := ""
 	if has_status && letter != 'I' {
 		if row.is_dir {
@@ -114,13 +109,12 @@ tree_row_node :: proc(
 	}
 	content := tui.row([]tui.Node{
 		tui.transparent(row.depth * 2),
-		tui.text(chevron),
-		tui.text(" "),
+		tui.text(chevron, tui.Style{attrs = {.Dim}}),
 		tui.text(icon.glyph, tree_icon_style(icon)),
 		tui.text(" "),
 		tui.priority(tui.truncate(tui.text(row.name, name_style), 0), 0, allocator),
 		tui.spacer(),
-		tui.text(marker, status_style(letter)),
+		tui.text(marker, tui.merge_style(status_style(letter), tui.Style{attrs = {.Bold}})),
 		tui.transparent(2),
 	}, allocator)
 	return tui.region(content, row.path, []string{"open", "menu"}, allocator = allocator)
@@ -289,6 +283,11 @@ tree_destroy_proc :: proc(data: rawptr) {
 	free(state, allocator)
 }
 
+tree_heading_proc :: proc(data: rawptr) -> Tab_Heading {
+	state := (^Tree_Tab)(data)
+	return Tab_Heading{title = filepath.base(state.tree.root)}
+}
+
 tree_tab :: proc(
 	root: string,
 	theme := model.Icon_Theme.Emoji,
@@ -308,6 +307,7 @@ tree_tab :: proc(
 		menu = tree_menu_proc,
 		action = tree_action_proc,
 		destroy = tree_destroy_proc,
+		heading = tree_heading_proc,
 	}
 }
 

@@ -158,29 +158,48 @@ overlay_paste :: proc(overlay: ^Overlay, value: string) {
 }
 
 overlay_fill :: proc(buffer: ^tui.Buffer, rect: tui.Rect, style: tui.Style) {
-	for y in rect.y ..< rect.y + rect.height {
-		for x in rect.x ..< rect.x + rect.width {
-			tui.buffer_set(buffer, x, y, tui.Cell{rune = ' ', style = style})
-		}
+	tui.buffer_fill(buffer, rect, style)
+}
+
+overlay_rect :: proc(overlay: ^Overlay, width, height: int) -> tui.Rect {
+	panel_width := min(max(tui.text_width(overlay.title) + 8, 32), width - 2)
+	panel_height := 4
+	if overlay.kind == .Menu do panel_height = min(len(overlay.entries) + 2, height - 2)
+	if overlay.kind == .Settings do panel_height = min(13, height - 2)
+	x := min(2, max(width - panel_width, 0))
+	y := min(ACTIVITY_HEIGHT + HEADER_HEIGHT + 1, max(height - panel_height, 0))
+	return tui.Rect{x = x, y = y, width = panel_width, height = panel_height}
+}
+
+overlay_frame :: proc(overlay: ^Overlay, buffer: ^tui.Buffer, rect: tui.Rect, style: tui.Style) {
+	overlay_fill(buffer, rect, tui.PLAIN_STYLE)
+	for x in rect.x + 1 ..< rect.x + rect.width - 1 {
+		tui.buffer_set(buffer, x, rect.y, tui.Cell{rune = '─', style = style})
+		tui.buffer_set(buffer, x, rect.y + rect.height - 1, tui.Cell{rune = '─', style = style})
 	}
+	for y in rect.y + 1 ..< rect.y + rect.height - 1 {
+		tui.buffer_set(buffer, rect.x, y, tui.Cell{rune = '│', style = style})
+		tui.buffer_set(buffer, rect.x + rect.width - 1, y, tui.Cell{rune = '│', style = style})
+	}
+	tui.buffer_set(buffer, rect.x, rect.y, tui.Cell{rune = '┌', style = style})
+	tui.buffer_set(buffer, rect.x + rect.width - 1, rect.y, tui.Cell{rune = '┐', style = style})
+	tui.buffer_set(buffer, rect.x, rect.y + rect.height - 1, tui.Cell{rune = '└', style = style})
+	tui.buffer_set(buffer, rect.x + rect.width - 1, rect.y + rect.height - 1, tui.Cell{rune = '┘', style = style})
+	title := fmt.aprintf("─ %s ", overlay.title, allocator = context.temp_allocator)
+	tui.buffer_draw_text(buffer, rect.x + 1, rect.y, title, tui.Style{attrs = {.Dim}}, rect.width - 2)
 }
 
 overlay_render :: proc(overlay: ^Overlay, buffer: ^tui.Buffer) {
 	if overlay.kind == .None || buffer.width < 12 || buffer.height < 4 do return
-	width := min(max(tui.text_width(overlay.title) + 4, 28), buffer.width - 2)
-	height := 3
-	if overlay.kind == .Menu do height = min(len(overlay.entries) + 2, buffer.height - 2)
-	if overlay.kind == .Settings do height = min(7, buffer.height - 2)
-	x := (buffer.width - width) / 2
-	y := (buffer.height - height) / 2
-	panel := tui.Style{fg = tui.rgb(0xd4, 0xd4, 0xd4), bg = tui.rgb(0x20, 0x22, 0x28)}
-	selected := tui.Style{fg = tui.rgb(0xff, 0xff, 0xff), bg = tui.rgb(0x38, 0x3e, 0x4a), attrs = {.Bold}}
-	overlay_fill(buffer, tui.Rect{x = x, y = y, width = width, height = height}, panel)
-	tui.buffer_draw_text(buffer, x + 2, y, overlay.title, tui.merge_style(panel, tui.Style{attrs = {.Bold}}), width - 4)
+	rect := overlay_rect(overlay, buffer.width, buffer.height)
+	x, y, width, height := rect.x, rect.y, rect.width, rect.height
+	panel := tui.PLAIN_STYLE
+	selected := tui.Style{fg = tui.DEFAULT_COLOR, bg = tui.HERDR_DARK_GRAY, attrs = {.Bold}}
+	overlay_frame(overlay, buffer, rect, tui.Style{attrs = {.Dim}})
 	switch overlay.kind {
 	case .Menu:
 		for entry, index in overlay.entries {
-			if index + 1 >= height do break
+			if index + 1 >= height - 1 do break
 			style := panel
 			if index == overlay.selected do style = selected
 			overlay_fill(buffer, tui.Rect{x = x + 1, y = y + index + 1, width = width - 2, height = 1}, style)
@@ -195,10 +214,10 @@ overlay_render :: proc(overlay: ^Overlay, buffer: ^tui.Buffer) {
 		tui.buffer_draw_text(buffer, x + 2, y + 1, "y confirm · n cancel", panel, width - 4)
 	case .Settings:
 		lines := [?]string{
-			fmt.aprintf("i  icon theme       %s", overlay.settings_icons),
-			fmt.aprintf(".  hidden files    %s", overlay.settings_hidden ? "on" : "off"),
-			fmt.aprintf("g  git decorations %s", overlay.settings_git ? "on" : "off"),
-			fmt.aprintf("s  start tab       %s", overlay.settings_start),
+			fmt.aprintf(" Icon theme         %s", overlay.settings_icons),
+			fmt.aprintf(" Hidden files       %s", overlay.settings_hidden ? "shown" : "hidden"),
+			fmt.aprintf(" Git decorations    %s", overlay.settings_git ? "shown" : "hidden"),
+			fmt.aprintf(" Start tab          %s", overlay.settings_start),
 		}
 		defer {
 			for line in lines do delete(line)
@@ -207,7 +226,15 @@ overlay_render :: proc(overlay: ^Overlay, buffer: ^tui.Buffer) {
 			style := panel
 			if index == overlay.selected do style = selected
 			overlay_fill(buffer, tui.Rect{x = x + 1, y = y + index + 1, width = width - 2, height = 1}, style)
-			tui.buffer_draw_text(buffer, x + 2, y + index + 1, line, style, width - 4)
+			tui.buffer_draw_text(buffer, x + 1, y + index + 1, line, style, width - 2)
+		}
+		hotkey_y := y + 6
+		if hotkey_y < y + height - 1 {
+			tui.buffer_draw_text(buffer, x + 2, hotkey_y, "Hotkeys", tui.Style{attrs = {.Bold}}, width - 4)
+			tui.buffer_draw_text(buffer, x + 3, hotkey_y + 1, "↑↓ move   ←→ fold", tui.Style{attrs = {.Dim}}, width - 5)
+			tui.buffer_draw_text(buffer, x + 3, hotkey_y + 2, "⏎ toggle  r refresh", tui.Style{attrs = {.Dim}}, width - 5)
+			tui.buffer_draw_text(buffer, x + 3, hotkey_y + 3, ". dotfiles  m menu", tui.Style{attrs = {.Dim}}, width - 5)
+			tui.buffer_draw_text(buffer, x + 2, hotkey_y + 4, "click/⏎ toggle · esc close", tui.Style{attrs = {.Dim}}, width - 4)
 		}
 	case .None:
 	}

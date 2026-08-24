@@ -10,6 +10,7 @@ Node_Kind :: enum {
 	Truncate,
 	Styled,
 	Spacer,
+	Fill,
 	Transparent,
 	Priority,
 	Region,
@@ -25,6 +26,7 @@ Padding :: struct {
 Node :: struct {
 	kind:       Node_Kind,
 	value:      string,
+	fill_rune:  rune,
 	mark:       string,
 	style:      Style,
 	children:   [dynamic]Node,
@@ -72,6 +74,10 @@ styled :: proc(value: Node, style: Style, allocator := context.allocator) -> Nod
 
 spacer :: proc(weight := 1) -> Node {
 	return Node{kind = .Spacer, weight = max(weight, 1)}
+}
+
+fill :: proc(value := ' ', style := PLAIN_STYLE, weight := 1) -> Node {
+	return Node{kind = .Fill, fill_rune = value, style = style, weight = max(weight, 1)}
 }
 
 transparent :: proc(width: int) -> Node {
@@ -180,7 +186,7 @@ node_width :: proc(node: ^Node) -> int {
 	case .Styled, .Priority, .Region:
 		if len(node.children) == 0 do return 0
 		return node_width(&node.children[0])
-	case .Spacer:
+	case .Spacer, .Fill:
 		return 0
 	case .Transparent:
 		return node.width
@@ -205,7 +211,7 @@ node_height :: proc(node: ^Node) -> int {
 	case .Styled, .Truncate, .Priority, .Region:
 		if len(node.children) == 0 do return 0
 		return node_height(&node.children[0])
-	case .Text, .Spacer, .Transparent:
+	case .Text, .Spacer, .Fill, .Transparent:
 		return 1
 	}
 	return 0
@@ -227,8 +233,14 @@ render_node :: proc(buffer: ^Buffer, layout: ^Layout, node: ^Node, rect: Rect, i
 		buffer_draw_text(buffer, rect.x, rect.y, node.value, merge_style(inherited, node.style), rect.width)
 	case .Transparent, .Spacer:
 		return
+	case .Fill:
+		value := node.fill_rune
+		if value == 0 do value = ' '
+		buffer_fill(buffer, rect, merge_style(inherited, node.style), value)
 	case .Styled:
-		if len(node.children) > 0 do render_node(buffer, layout, &node.children[0], rect, merge_style(inherited, node.style))
+		style := merge_style(inherited, node.style)
+		if style.bg.kind != .Default do buffer_fill(buffer, rect, style)
+		if len(node.children) > 0 do render_node(buffer, layout, &node.children[0], rect, style)
 	case .Priority:
 		if len(node.children) > 0 do render_node(buffer, layout, &node.children[0], rect, inherited)
 	case .Region:
@@ -274,7 +286,7 @@ render_node :: proc(buffer: ^Buffer, layout: ^Layout, node: ^Node, rect: Rect, i
 		total := 0
 		spacer_weight := 0
 		for &child, index in node.children {
-			if child.kind == .Spacer {
+			if child.kind == .Spacer || child.kind == .Fill {
 				spacer_weight += child.weight
 				continue
 			}
@@ -300,14 +312,14 @@ render_node :: proc(buffer: ^Buffer, layout: ^Layout, node: ^Node, rect: Rect, i
 			remaining := rect.width - total
 			assigned := 0
 			for &child, index in node.children {
-				if child.kind != .Spacer do continue
+				if child.kind != .Spacer && child.kind != .Fill do continue
 				share := remaining * child.weight / spacer_weight
 				widths[index] = share
 				assigned += share
 			}
 			for index in 0 ..< count {
 				if assigned >= remaining do break
-				if node.children[index].kind == .Spacer {
+				if node.children[index].kind == .Spacer || node.children[index].kind == .Fill {
 					widths[index] += 1
 					assigned += 1
 				}

@@ -50,7 +50,7 @@ Core keys:
 | `r` | refresh directory listings |
 | `m` / right click | open the context menu |
 | `1`…`9` | switch tabs |
-| `,` | open settings |
+| `s` / `,` | open settings |
 | `q` | quit |
 
 Mouse-wheel scrolling changes only the viewport; it never moves the selected

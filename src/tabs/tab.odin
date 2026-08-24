@@ -8,9 +8,11 @@ Row_Kind :: enum {
 	Generic,
 	Repo_Header,
 	Commit_Box,
+	Commit_Button,
 	Section_Header,
 	Git_Entry,
 	Graph_Commit,
+	Drawer_Header,
 }
 
 Row :: struct {
@@ -25,7 +27,14 @@ Row :: struct {
 	repo_index: int,
 	entry_index: int,
 	staged:     bool,
+	input_value: string,
 	node:       tui.Node,
+}
+
+Tab_Heading :: struct {
+	title:  string,
+	detail: string,
+	meta:   string,
 }
 
 rows_destroy :: proc(rows: ^[dynamic]Row) {
@@ -44,6 +53,7 @@ Tab_Result :: struct {
 	message:      string,
 	open_path:    string,
 	root_path:    string,
+	switch_tab:   string,
 }
 
 Rows_Proc :: proc(data: rawptr, allocator: runtime.Allocator) -> [dynamic]Row
@@ -55,6 +65,8 @@ Destroy_Proc :: proc(data: rawptr)
 Focus_Proc :: proc(data: rawptr) -> Tab_Result
 Paste_Proc :: proc(data: rawptr, value: string, selected: ^Row) -> Tab_Result
 Root_Proc :: proc(data: rawptr, root: string) -> Tab_Result
+Heading_Proc :: proc(data: rawptr) -> Tab_Heading
+Theme_Proc :: proc(data: rawptr, theme: model.Icon_Theme)
 
 Tab :: struct {
 	name:      string,
@@ -70,6 +82,8 @@ Tab :: struct {
 	on_focus:  Focus_Proc,
 	on_paste:  Paste_Proc,
 	on_root:   Root_Proc,
+	heading:   Heading_Proc,
+	set_theme: Theme_Proc,
 }
 
 tab_rows :: proc(tab: ^Tab, allocator := context.allocator) -> [dynamic]Row {
@@ -115,4 +129,13 @@ tab_paste :: proc(tab: ^Tab, value: string, selected: ^Row) -> Tab_Result {
 tab_root :: proc(tab: ^Tab, root: string) -> Tab_Result {
 	if tab.on_root == nil do return {}
 	return tab.on_root(tab.data, root)
+}
+
+tab_heading :: proc(tab: ^Tab) -> Tab_Heading {
+	if tab.heading == nil do return Tab_Heading{title = tab.title}
+	return tab.heading(tab.data)
+}
+
+tab_set_theme :: proc(tab: ^Tab, theme: model.Icon_Theme) {
+	if tab.set_theme != nil do tab.set_theme(tab.data, theme)
 }

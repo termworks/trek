@@ -89,6 +89,14 @@ buffer_set :: proc(buffer: ^Buffer, x, y: int, cell: Cell) {
 	buffer.dirty = true
 }
 
+buffer_fill :: proc(buffer: ^Buffer, rect: Rect, style := PLAIN_STYLE, value := ' ') {
+	for y in rect.y ..< rect.y + rect.height {
+		for x in rect.x ..< rect.x + rect.width {
+			buffer_set(buffer, x, y, Cell{rune = value, style = style})
+		}
+	}
+}
+
 buffer_draw_text :: proc(buffer: ^Buffer, x, y: int, value: string, style := PLAIN_STYLE, limit := -1) -> int {
 	column := x
 	max_column := buffer.width

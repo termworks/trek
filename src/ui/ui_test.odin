@@ -67,7 +67,7 @@ test_shell_right_click_opens_menu :: proc(t: ^testing.T) {
 	shell_init(&shell)
 	defer shell_destroy(&shell)
 	shell_add_tab(&shell, fake_tab("one"))
-	shell_mouse(&shell, tui.Mouse_Event{x = 5, y = 1, button = 2, action = .Press}, 40, 12)
+	shell_mouse(&shell, tui.Mouse_Event{x = 5, y = 4, button = 2, action = .Press}, 40, 12)
 	testing.expect_value(t, shell.selected, 0)
 	testing.expect_value(t, shell.overlay.kind, Overlay_Kind.Menu)
 }
@@ -111,10 +111,57 @@ test_shell_renders_headless_buffer :: proc(t: ^testing.T) {
 	tui.layout_init(&layout)
 	defer tui.layout_destroy(&layout)
 	shell_render(&shell, &buffer, &layout)
-	cell, ok := tui.buffer_get(&buffer, ACTIVITY_WIDTH + 1, 0)
+	cell, ok := tui.buffer_get(&buffer, 3, ACTIVITY_HEIGHT)
 	testing.expect(t, ok)
 	testing.expect_value(t, cell.rune, 'E')
 	testing.expect(t, len(layout.regions) == 0)
+	cap, cap_ok := tui.buffer_get(&buffer, 1, 0)
+	testing.expect(t, cap_ok)
+	testing.expect_value(t, cap.rune, '▄')
+}
+
+@(test)
+test_settings_overlay_uses_reference_frame :: proc(t: ^testing.T) {
+	overlay: Overlay
+	overlay_init(&overlay)
+	defer overlay_destroy(&overlay)
+	overlay_settings(&overlay, "material", false, true, "tree")
+	buffer: tui.Buffer
+	tui.buffer_init(&buffer, 50, 20)
+	defer tui.buffer_destroy(&buffer)
+	overlay_render(&overlay, &buffer)
+	rect := overlay_rect(&overlay, buffer.width, buffer.height)
+	top_left, _ := tui.buffer_get(&buffer, rect.x, rect.y)
+	top_right, _ := tui.buffer_get(&buffer, rect.x + rect.width - 1, rect.y)
+	bottom_left, _ := tui.buffer_get(&buffer, rect.x, rect.y + rect.height - 1)
+	selected, _ := tui.buffer_get(&buffer, rect.x + 2, rect.y + 1)
+	testing.expect_value(t, top_left.rune, '┌')
+	testing.expect_value(t, top_right.rune, '┐')
+	testing.expect_value(t, bottom_left.rune, '└')
+	testing.expect_value(t, selected.style.bg, tui.HERDR_DARK_GRAY)
+}
+
+@(test)
+test_graph_uses_source_control_activity_chip :: proc(t: ^testing.T) {
+	shell: Shell
+	shell_init(&shell)
+	defer shell_destroy(&shell)
+	shell_add_tab(&shell, fake_tab("tree"))
+	shell_add_tab(&shell, fake_tab("changes"))
+	shell_add_tab(&shell, fake_tab("graph"))
+	shell_switch_tab(&shell, 2)
+	buffer: tui.Buffer
+	tui.buffer_init(&buffer, 40, 10)
+	defer tui.buffer_destroy(&buffer)
+	layout: tui.Layout
+	tui.layout_init(&layout)
+	defer tui.layout_destroy(&layout)
+	shell_render(&shell, &buffer, &layout)
+	changes_start, _ := shell_activity_bounds(&shell, 1)
+	cap, _ := tui.buffer_get(&buffer, changes_start, 0)
+	after, _ := tui.buffer_get(&buffer, 11, 0)
+	testing.expect_value(t, cap.rune, '▄')
+	testing.expect_value(t, after.rune, ' ')
 }
 
 @(test)

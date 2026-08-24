@@ -122,7 +122,7 @@ run_tui :: proc(root: string) -> bool {
 	ui.shell_add_tab(&shell, tabs.tree_tab(root, theme, preferences.hidden, preferences.git_decorations))
 	_ = tabs.tree_restore_expanded(ui.shell_active_tab(&shell), settings.preferences_expanded(&preferences, root))
 	ui.shell_reload(&shell)
-	ui.shell_add_tab(&shell, tabs.changes_tab(root))
+	ui.shell_add_tab(&shell, tabs.changes_tab(root, theme))
 	ui.shell_add_tab(&shell, tabs.graph_tab(root))
 	for &definition in config.tabs do ui.shell_add_tab(&shell, tabs.lua_tab(&config, &definition))
 	_ = ui.shell_switch_named(&shell, config.settings.start_tab)
@@ -171,7 +171,7 @@ run_tui :: proc(root: string) -> bool {
 						delete(message)
 					}
 				} else {
-					ui.shell_key(&shell, event.key, max(buffer.height - 2, 0))
+					ui.shell_key(&shell, event.key, ui.shell_viewport_height(buffer.height))
 				}
 				ui.shell_apply_lua_pending(&shell)
 				if !run_suspended(&config, &terminal, &buffer) do return false

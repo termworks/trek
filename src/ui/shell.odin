@@ -8,7 +8,9 @@ import settings "../settings"
 import tabpkg "../tabs"
 import tui "../tui"
 
-ACTIVITY_WIDTH :: 3
+ACTIVITY_HEIGHT :: 3
+HEADER_HEIGHT :: 1
+FOOTER_HEIGHT :: 1
 
 Shell :: struct {
 	tabs:       [dynamic]tabpkg.Tab,
@@ -34,7 +36,7 @@ shell_init :: proc(shell: ^Shell, allocator := context.allocator) {
 	shell.menu_entries = make([dynamic]model.Menu_Entry, allocator)
 	shell.selected = -1
 	shell.hover = -1
-	shell.footer = strings.clone("↑↓ navigate · Enter open · m menu · 1-9 tabs · q quit", allocator)
+	shell.footer = strings.clone(" m / ctrl+rclick: menu", allocator)
 	overlay_init(&shell.overlay, allocator)
 }
 
@@ -101,6 +103,7 @@ shell_apply_setting :: proc(shell: ^Shell, setting: Setting_Action) {
 	case .None:
 	}
 	_ = tabpkg.tree_apply_preferences(tab, theme, hidden, git_decorations)
+	for &other in shell.tabs do tabpkg.tab_set_theme(&other, theme)
 	shell_sync_preferences(shell)
 	_ = settings.preferences_save(shell.preferences)
 	shell_reload(shell)
@@ -311,6 +314,7 @@ shell_apply_result :: proc(shell: ^Shell, result: tabpkg.Tab_Result) {
 			}
 		}
 	}
+	if result.switch_tab != "" do _ = shell_switch_named(shell, result.switch_tab)
 	if result.rows_changed {
 		shell_sync_preferences(shell)
 		if shell.preferences != nil do _ = settings.preferences_save(shell.preferences)
@@ -423,7 +427,7 @@ shell_key :: proc(shell: ^Shell, key: tui.Key, viewport: int) {
 		shell_switch_tab(shell, int(key.rune - '1'))
 		return
 	}
-	if key.code == .Rune && key.rune == ',' {
+	if key.code == .Rune && (key.rune == 's' || key.rune == ',') {
 		if shell.preferences != nil {
 			overlay_settings(
 				&shell.overlay,
@@ -453,7 +457,7 @@ shell_paste :: proc(shell: ^Shell, value: string) {
 }
 
 shell_mouse :: proc(shell: ^Shell, mouse: tui.Mouse_Event, width, height: int) {
-	viewport := max(height - 2, 0)
+	viewport := shell_viewport_height(height)
 	if mouse.action == .Scroll_Up {
 		shell_wheel(shell, -3, viewport)
 		return
@@ -462,12 +466,32 @@ shell_mouse :: proc(shell: ^Shell, mouse: tui.Mouse_Event, width, height: int) {
 		shell_wheel(shell, 3, viewport)
 		return
 	}
-	if mouse.x < ACTIVITY_WIDTH && mouse.y >= 1 {
-		if mouse.action == .Press do shell_switch_tab(shell, mouse.y - 1)
+	if mouse.y == 1 {
+		if mouse.action != .Press do return
+		for &activity_tab, index in shell.tabs {
+			if activity_tab.name == "graph" do continue
+			start, end := shell_activity_bounds(shell, index)
+			if mouse.x >= start && mouse.x < end {
+				shell_switch_tab(shell, index)
+				return
+			}
+		}
+		gear := shell_gear(shell)
+		gear_width := tui.text_width(gear) + 2
+		if mouse.x >= width - gear_width && shell.preferences != nil {
+			overlay_settings(
+				&shell.overlay,
+				shell.preferences.icons,
+				shell.preferences.hidden,
+				shell.preferences.git_decorations,
+				shell.preferences.start_tab,
+			)
+		}
 		return
 	}
-	if mouse.y < 1 || mouse.y >= height - 1 do return
-	index := shell_row_at_line(shell, shell.scroll + mouse.y - 1)
+	body_top := ACTIVITY_HEIGHT + HEADER_HEIGHT
+	if mouse.y < body_top || mouse.y >= height - FOOTER_HEIGHT do return
+	index := shell_row_at_line(shell, shell.scroll + mouse.y - body_top)
 	if mouse.action == .Move {
 		shell.hover = index
 		return
@@ -482,63 +506,142 @@ shell_mouse :: proc(shell: ^Shell, mouse: tui.Mouse_Event, width, height: int) {
 
 shell_cursor_position :: proc(shell: ^Shell, width, height: int) -> (int, int, bool) {
 	if shell.overlay.kind == .Prompt {
-		panel_width := min(max(tui.text_width(shell.overlay.title) + 4, 28), width - 2)
-		x := (width - panel_width) / 2
-		y := (height - 3) / 2
-		input_width := max(panel_width - 6, 0)
+		rect := overlay_rect(&shell.overlay, width, height)
+		input_width := max(rect.width - 6, 0)
 		column := min(tui.text_width(string(shell.overlay.input[:])), input_width)
-		return x + 4 + column, y + 1, true
+		return rect.x + 4 + column, rect.y + 1, true
 	}
 	if shell.overlay.kind != .None do return 0, 0, false
 	row := shell_selected_row(shell)
 	if row == nil || row.kind != .Commit_Box do return 0, 0, false
-	line := shell_row_top(shell, shell.selected) - shell.scroll + 1
-	if line < 1 || line + 1 >= height - 1 do return 0, 0, false
-	value := ""
-	if len(row.node.children) > 1 {
-		input_row := &row.node.children[1]
-		if len(input_row.children) > 1 {
-			priority := &input_row.children[1]
-			if len(priority.children) > 0 {
-				truncate := &priority.children[0]
-				if len(truncate.children) > 0 do value = truncate.children[0].value
-			}
-		}
-	}
-	column := min(tui.text_width(value), max(width - ACTIVITY_WIDTH - 5, 0))
-	return ACTIVITY_WIDTH + 3 + column, line + 1, true
+	line := shell_row_top(shell, shell.selected) - shell.scroll + ACTIVITY_HEIGHT + HEADER_HEIGHT
+	if line < ACTIVITY_HEIGHT + HEADER_HEIGHT || line + 1 >= height - FOOTER_HEIGHT do return 0, 0, false
+	column := min(tui.text_width(row.input_value), max(width - 5, 0))
+	return 1 + column, line + 1, true
 }
 
 fill_rect :: proc(buffer: ^tui.Buffer, rect: tui.Rect, style: tui.Style) {
-	for y in rect.y ..< rect.y + rect.height {
-		for x in rect.x ..< rect.x + rect.width {
-			tui.buffer_set(buffer, x, y, tui.Cell{rune = ' ', style = style})
+	tui.buffer_fill(buffer, rect, style)
+}
+
+shell_viewport_height :: proc(height: int) -> int {
+	return max(height - ACTIVITY_HEIGHT - HEADER_HEIGHT - FOOTER_HEIGHT, 0)
+}
+
+shell_material_icons :: proc(shell: ^Shell) -> bool {
+	if shell.preferences != nil do return shell.preferences.icons == "material"
+	if shell.config != nil do return shell.config.settings.icons == "material"
+	return false
+}
+
+shell_tab_icon :: proc(shell: ^Shell, index: int) -> string {
+	if index < 0 || index >= len(shell.tabs) do return ""
+	material := shell_material_icons(shell)
+	switch shell.tabs[index].name {
+	case "tree": return material ? "\uf07b" : "📁"
+	case "changes": return material ? "\uf126" : "🔀"
+	case "graph": return material ? "\uea88" : "⑂"
+	}
+	return shell.tabs[index].icon
+}
+
+shell_gear :: proc(shell: ^Shell) -> string {
+	if shell_material_icons(shell) do return "\uf013"
+	return "⚙"
+}
+
+shell_activity_bounds :: proc(shell: ^Shell, target: int) -> (int, int) {
+	x := 1
+	for &tab, index in shell.tabs {
+		if tab.name == "graph" do continue
+		icon := shell_tab_icon(shell, index)
+		slack := shell_material_icons(shell) ? 1 : 0
+		width := tui.text_width(icon) + slack + 2
+		if index == target do return x, x + width
+		x += width + 1
+	}
+	return 0, 0
+}
+
+shell_draw_activity :: proc(shell: ^Shell, buffer: ^tui.Buffer) {
+	active_tab := shell_active_tab(shell)
+	for &tab, index in shell.tabs {
+		if tab.name == "graph" do continue
+		start, end := shell_activity_bounds(shell, index)
+		if start >= buffer.width do break
+		active := index == shell.active
+		if active_tab != nil && active_tab.name == "graph" && tab.name == "changes" do active = true
+		style := tui.Style{attrs = {.Dim}}
+		if active do style = tui.Style{bg = tui.HERDR_DARK_GRAY, attrs = {.Bold}}
+		icon := shell_tab_icon(shell, index)
+		slack := shell_material_icons(shell) ? " " : ""
+		chip := strings.concatenate([]string{" ", icon, slack, " "}, context.temp_allocator)
+		tui.buffer_draw_text(buffer, start, 1, chip, style, end - start)
+		if active {
+			cap := tui.Style{fg = tui.HERDR_DARK_GRAY, bg = tui.DEFAULT_COLOR}
+			fill_rect(buffer, tui.Rect{x = start, y = 0, width = end - start, height = 1}, cap)
+			fill_rect(buffer, tui.Rect{x = start, y = 2, width = end - start, height = 1}, cap)
+			for x in start ..< end {
+				tui.buffer_set(buffer, x, 0, tui.Cell{rune = '▄', style = cap})
+				tui.buffer_set(buffer, x, 2, tui.Cell{rune = '▀', style = cap})
+			}
 		}
 	}
+	gear := shell_gear(shell)
+	gear_text := strings.concatenate([]string{" ", gear, " "}, context.temp_allocator)
+	gear_width := tui.text_width(gear_text)
+	if gear_width <= buffer.width do tui.buffer_draw_text(buffer, buffer.width - gear_width, 1, gear_text, tui.Style{attrs = {.Dim}}, gear_width)
+}
+
+shell_draw_header :: proc(shell: ^Shell, buffer: ^tui.Buffer, tab: ^tabpkg.Tab) {
+	heading := tabpkg.tab_heading(tab)
+	y := ACTIVITY_HEIGHT
+	x := 0
+	if tab.name == "tree" {
+		label := strings.to_upper(heading.title, context.temp_allocator)
+		x += tui.buffer_draw_text(buffer, x, y, " ", tui.PLAIN_STYLE, 1)
+		x += tui.buffer_draw_text(buffer, x, y, label, tui.Style{fg = tui.HERDR_LIGHT_BLUE, attrs = {.Bold}}, buffer.width - x)
+	} else {
+		x += tui.buffer_draw_text(buffer, x, y, " ▾ ", tui.Style{attrs = {.Bold}}, min(3, buffer.width))
+		x += tui.buffer_draw_text(buffer, x, y, heading.title, tui.Style{attrs = {.Bold}}, buffer.width - x)
+		if heading.detail != "" && x < buffer.width {
+			x += tui.buffer_draw_text(buffer, x, y, "  ", tui.Style{attrs = {.Dim}}, buffer.width - x)
+			x += tui.buffer_draw_text(buffer, x, y, heading.detail, tui.Style{attrs = {.Dim}}, buffer.width - x)
+		}
+		if heading.meta != "" && x < buffer.width {
+			x += tui.buffer_draw_text(buffer, x, y, " · ", tui.Style{attrs = {.Dim}}, buffer.width - x)
+			_ = tui.buffer_draw_text(buffer, x, y, heading.meta, tui.Style{attrs = {.Dim}}, buffer.width - x)
+		}
+	}
+	actions := " ⟳ ⊟ "
+	if shell_material_icons(shell) {
+		actions = " \ueb37 \ueac5 "
+		if tab.name == "tree" do actions = " \uea7f \uea80 \ueb37 \ueac5 "
+	} else if tab.name == "tree" {
+		actions = " 📄 📁 ⟳ ⊟ "
+	}
+	actions_width := tui.text_width(actions)
+	if actions_width < buffer.width do tui.buffer_draw_text(buffer, buffer.width - actions_width, y, actions, tui.Style{attrs = {.Dim}}, actions_width)
 }
 
 shell_render :: proc(shell: ^Shell, buffer: ^tui.Buffer, layout: ^tui.Layout) {
 	tui.buffer_clear(buffer)
 	tui.layout_clear(layout)
-	if buffer.width <= ACTIVITY_WIDTH || buffer.height < 3 do return
-	activity_style := tui.Style{fg = tui.rgb(0x9d, 0xa5, 0xb4), bg = tui.rgb(0x18, 0x1a, 0x1f)}
-	active_style := tui.Style{fg = tui.rgb(0xff, 0xff, 0xff), bg = tui.rgb(0x32, 0x36, 0x3d), attrs = {.Bold}}
-	selected_style := tui.Style{fg = tui.DEFAULT_COLOR, bg = tui.rgb(0x32, 0x36, 0x3d)}
-	hover_style := tui.Style{fg = tui.DEFAULT_COLOR, bg = tui.rgb(0x27, 0x2b, 0x33)}
-	fill_rect(buffer, tui.Rect{width = ACTIVITY_WIDTH, height = buffer.height}, activity_style)
-	for tab, index in shell.tabs {
-		style := activity_style
-		if index == shell.active do style = active_style
-		fill_rect(buffer, tui.Rect{x = 0, y = index + 1, width = ACTIVITY_WIDTH, height = 1}, style)
-		tui.buffer_draw_text(buffer, 1, index + 1, tab.icon, style, 2)
-	}
+	if buffer.width < 8 || buffer.height < ACTIVITY_HEIGHT + HEADER_HEIGHT + FOOTER_HEIGHT do return
+	selected_style := tui.Style{fg = tui.DEFAULT_COLOR, bg = tui.HERDR_DARK_GRAY, attrs = {.Bold}}
+	hover_style := tui.Style{fg = tui.DEFAULT_COLOR, bg = tui.HERDR_HOVER_BG}
+	shell_draw_activity(shell, buffer)
 	tab := shell_active_tab(shell)
 	if tab == nil do return
-	content_x := ACTIVITY_WIDTH
-	content_width := buffer.width - ACTIVITY_WIDTH
-	footer_y := buffer.height - 1
-	tui.buffer_draw_text(buffer, content_x + 1, 0, tab.title, tui.Style{attrs = {.Bold}}, content_width - 2)
-	viewport := buffer.height - 2
+	shell_draw_header(shell, buffer, tab)
+	content_x := 0
+	content_width := buffer.width
+	body_top := ACTIVITY_HEIGHT + HEADER_HEIGHT
+	footer_y := buffer.height - FOOTER_HEIGHT
+	viewport := shell_viewport_height(buffer.height)
+	total := shell_total_height(shell)
+	body_width := content_width
+	if total > viewport do body_width = max(body_width - 1, 0)
 	line := -shell.scroll
 	for &row, index in shell.rows {
 		height := max(row.height, 1)
@@ -547,31 +650,34 @@ shell_render :: proc(shell: ^Shell, buffer: ^tui.Buffer, layout: ^tui.Layout) {
 			continue
 		}
 		if line >= viewport do break
-		y := 1 + max(line, 0)
+		y := body_top + max(line, 0)
 		visible_height := min(height, viewport - max(line, 0))
 		style := tui.PLAIN_STYLE
 		if shell.selected == index && shell.selected >= 0 {
-			style = selected_style
+			if row.kind == .Commit_Box {
+				style = tui.Style{fg = tui.HERDR_BUTTON_BLUE}
+			} else {
+				style = selected_style
+			}
 		} else if shell.hover == index {
 			style = hover_style
 		}
-		fill_rect(buffer, tui.Rect{x = content_x, y = y, width = content_width, height = visible_height}, style)
-		tui.render_node(buffer, layout, &row.node, tui.Rect{x = content_x, y = y, width = content_width, height = visible_height}, style)
+		fill_rect(buffer, tui.Rect{x = content_x, y = y, width = body_width, height = visible_height}, style)
+		tui.render_node(buffer, layout, &row.node, tui.Rect{x = content_x, y = y, width = body_width, height = visible_height}, style)
 		line += height
 	}
-	total := shell_total_height(shell)
 	if total > viewport {
 		track_x := buffer.width - 1
 		thumb_height := max(viewport * viewport / total, 1)
 		maximum := max(total - viewport, 1)
-		thumb_y := 1 + shell.scroll * max(viewport - thumb_height, 0) / maximum
-		for y in 1 ..< footer_y do tui.buffer_set(buffer, track_x, y, tui.Cell{rune = '│', style = tui.Style{attrs = {.Dim}}})
+		thumb_y := body_top + shell.scroll * max(viewport - thumb_height, 0) / maximum
+		for y in body_top ..< footer_y do tui.buffer_set(buffer, track_x, y, tui.Cell{rune = '│', style = tui.Style{attrs = {.Dim}}})
 		for y in thumb_y ..< min(thumb_y + thumb_height, footer_y) do tui.buffer_set(buffer, track_x, y, tui.Cell{rune = '┃', style = tui.PLAIN_STYLE})
 	}
-	footer_style := tui.Style{fg = tui.rgb(0xa0, 0xa7, 0xb4), bg = tui.rgb(0x18, 0x1a, 0x1f), attrs = {.Dim}}
-	fill_rect(buffer, tui.Rect{x = content_x, y = footer_y, width = content_width, height = 1}, footer_style)
-	footer := tui.truncate_text(shell.footer, content_width - 2)
+	footer_style := tui.Style{attrs = {.Dim, .Italic}}
+	footer := tui.truncate_text(shell.footer, max(content_width - 4, 0))
 	defer delete(footer)
-	tui.buffer_draw_text(buffer, content_x + 1, footer_y, footer, footer_style, content_width - 2)
+	tui.buffer_draw_text(buffer, content_x, footer_y, footer, footer_style, max(content_width - 4, 0))
+	if content_width >= 3 do tui.buffer_draw_text(buffer, buffer.width - 3, footer_y, " « ", tui.Style{fg = tui.HERDR_LIGHT_BLUE, attrs = {.Bold}}, 3)
 	overlay_render(&shell.overlay, buffer)
 }

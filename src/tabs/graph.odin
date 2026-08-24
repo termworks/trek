@@ -2,7 +2,9 @@ package tabs
 
 import "base:runtime"
 import "core:fmt"
+import "core:path/filepath"
 import "core:strings"
+import "core:time"
 import gitcore "../git"
 import tui "../tui"
 
@@ -78,43 +80,65 @@ graph_cell_text :: proc(cell: rune) -> string {
 
 graph_lane_nodes :: proc(children: ^[dynamic]tui.Node, cells: []rune) {
 	for cell, lane in cells {
-		append(children, tui.text(graph_cell_text(cell), graph_lane_style(lane)))
-		append(children, tui.text(" "))
+		append(children, tui.priority(tui.text(graph_cell_text(cell), graph_lane_style(lane)), 100))
+		append(children, tui.priority(tui.text(" "), 100))
 	}
 }
 
 graph_ref_node :: proc(ref: string, lane: int, allocator: runtime.Allocator) -> tui.Node {
+	label := ref
+	if strings.has_prefix(label, "HEAD -> ") do label = label[len("HEAD -> "):]
+	color := graph_lane_style(lane).fg
+	if strings.has_prefix(label, "tag: ") do color = tui.HERDR_MODIFIED
+	if strings.contains(label, "origin/") do color = tui.rgb(0x6c, 0xae, 0xe4)
 	return tui.styled(tui.row([]tui.Node{
 		tui.text(" "),
-		tui.text(ref),
+		tui.text(label),
 		tui.text(" "),
-	}, allocator), tui.Style{fg = graph_lane_style(lane).fg, bg = tui.DEFAULT_COLOR, attrs = {.Reverse}}, allocator)
+	}, allocator), tui.Style{fg = tui.rgb(0x18, 0x1a, 0x1f), bg = color, attrs = {.Bold}}, allocator)
+}
+
+graph_relative_time :: proc(timestamp: i64, allocator: runtime.Allocator) -> string {
+	delta := max(time.to_unix_seconds(time.now()) - timestamp, 0)
+	if delta < 60 do return strings.clone("now", allocator)
+	if delta < 60 * 60 do return fmt.aprintf("%dm", delta / 60, allocator = allocator)
+	if delta < 24 * 60 * 60 do return fmt.aprintf("%dh", delta / (60 * 60), allocator = allocator)
+	if delta < 30 * 24 * 60 * 60 do return fmt.aprintf("%dd", delta / (24 * 60 * 60), allocator = allocator)
+	if delta < 365 * 24 * 60 * 60 do return fmt.aprintf("%dmo", delta / (30 * 24 * 60 * 60), allocator = allocator)
+	return fmt.aprintf("%dy", delta / (365 * 24 * 60 * 60), allocator = allocator)
+}
+
+graph_owned_text :: proc(value: string, style := tui.PLAIN_STYLE) -> tui.Node {
+	node := tui.text(value, style)
+	node.owns_values = true
+	return node
 }
 
 graph_commit_node :: proc(state: ^Graph_Tab, row: ^gitcore.Graph_Row, allocator: runtime.Allocator) -> tui.Node {
 	commit := &state.history.commits[row.commit_index]
 	children := make([dynamic]tui.Node, allocator)
 	defer delete(children)
-	append(&children, tui.text(" "))
+	append(&children, tui.priority(tui.transparent(1), 100))
 	graph_lane_nodes(&children, row.cells[:])
 	short_hash := commit.hash[:min(7, len(commit.hash))]
-	append(&children, tui.text(short_hash, tui.Style{attrs = {.Dim}}))
-	append(&children, tui.text(" "))
+	append(&children, tui.priority(tui.truncate(tui.text(commit.subject), 0), 20, allocator))
 	for ref in commit.refs {
-		append(&children, graph_ref_node(ref, row.lane, allocator))
-		append(&children, tui.text(" "))
+		append(&children, tui.priority(tui.text(" "), 60))
+		append(&children, tui.priority(graph_ref_node(ref, row.lane, allocator), 60, allocator))
 	}
-	append(&children, tui.priority(tui.truncate(tui.text(commit.subject), 0), 0, allocator))
 	append(&children, tui.spacer())
-	append(&children, tui.text(commit.author, tui.Style{attrs = {.Dim}}))
-	append(&children, tui.transparent(2))
+	relative := graph_relative_time(commit.timestamp, allocator)
+	metadata := fmt.aprintf("  %s · %s · %s", short_hash, commit.author, relative, allocator = allocator)
+	delete(relative)
+	append(&children, tui.priority(tui.truncate(graph_owned_text(metadata, tui.Style{attrs = {.Dim}}), 0), 0, allocator))
+	append(&children, tui.priority(tui.transparent(1), 100))
 	return tui.row(children[:], allocator)
 }
 
 graph_connector_node :: proc(row: ^gitcore.Graph_Row, allocator: runtime.Allocator) -> tui.Node {
 	children := make([dynamic]tui.Node, allocator)
 	defer delete(children)
-	append(&children, tui.text(" "))
+	append(&children, tui.priority(tui.transparent(1), 100))
 	graph_lane_nodes(&children, row.cells[:])
 	return tui.row(children[:], allocator)
 }
@@ -196,6 +220,11 @@ graph_root_proc :: proc(data: rawptr, root: string) -> Tab_Result {
 	return Tab_Result{rows_changed = true}
 }
 
+graph_heading_proc :: proc(data: rawptr) -> Tab_Heading {
+	state := (^Graph_Tab)(data)
+	return Tab_Heading{title = "Git Graph", detail = filepath.base(state.root)}
+}
+
 graph_tab :: proc(root: string, allocator := context.allocator) -> Tab {
 	state := graph_new(root, allocator)
 	return Tab{
@@ -209,5 +238,6 @@ graph_tab :: proc(root: string, allocator := context.allocator) -> Tab {
 		destroy = graph_destroy_proc,
 		on_focus = graph_focus_proc,
 		on_root = graph_root_proc,
+		heading = graph_heading_proc,
 	}
 }
