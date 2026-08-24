@@ -229,3 +229,33 @@ test_shorten_path_abbreviates_from_the_root :: proc(t: ^testing.T) {
 	defer delete(unicode)
 	testing.expect(t, text_width(unicode) <= 12)
 }
+
+// A row that does not fit sheds its lowest-priority parts. An ordinary node gives up
+// columns gradually, which is right for a subject; an atomic one disappears whole,
+// because half a date reads as corruption rather than as a narrow pane.
+@(test)
+test_atomic_nodes_drop_whole :: proc(t: ^testing.T) {
+	buffer: Buffer
+	buffer_init(&buffer, 12, 1)
+	defer buffer_destroy(&buffer)
+	layout: Layout
+	layout_init(&layout)
+	defer layout_destroy(&layout)
+
+	node := row([]Node{
+		priority(text("KEEP"), 90),
+		optional(text(" 2026-08-24"), 10),
+	})
+	defer node_destroy(&node)
+	render_node(&buffer, &layout, &node, Rect{width = 12, height = 1}, PLAIN_STYLE)
+
+	line := make([dynamic]byte, context.allocator)
+	defer delete(line)
+	for x in 0 ..< 12 {
+		cell, _ := buffer_get(&buffer, x, 0)
+		append(&line, byte(cell.rune))
+	}
+	text_line := strings.trim_space(string(line[:]))
+	// The date does not fit alongside KEEP, so it is gone rather than clipped.
+	testing.expect_value(t, text_line, "KEEP")
+}

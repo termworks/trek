@@ -216,7 +216,7 @@ test_graph_collapses_lane_overflow :: proc(t: ^testing.T) {
 
 @(test)
 test_graph_log_parser_reads_refs :: proc(t: ^testing.T) {
-	raw := "abc\u0000def 123\u0000HEAD -> main, tag: v1\u0000Ada\u00001700000000\u0000subject\u0000"
+	raw := "abc\u0000def 123\u0000HEAD -> main, tag: v1\u0000Ada\u00001700000000\u0000Mon Nov 14 22:13:20 2023 +0000\u0000subject\u0000"
 	history := parse_log(raw)
 	defer history_destroy(&history)
 	testing.expect_value(t, len(history.commits), 1)
@@ -224,6 +224,8 @@ test_graph_log_parser_reads_refs :: proc(t: ^testing.T) {
 	testing.expect_value(t, len(history.commits[0].refs), 2)
 	testing.expect_value(t, history.commits[0].refs[0], "HEAD -> main")
 	testing.expect_value(t, history.commits[0].timestamp, i64(1700000000))
+	testing.expect_value(t, history.commits[0].date, "Mon Nov 14 22:13:20 2023 +0000")
+	testing.expect_value(t, history.commits[0].subject, "subject")
 }
 
 // A hook that never returns is the realistic way git hangs, and trek runs git from

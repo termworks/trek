@@ -107,40 +107,122 @@ graph_ref_node :: proc(ref: string, lane: int, allocator: runtime.Allocator) -> 
 		tui.text(" "),
 	}, allocator), tui.Style{fg = tui.BG, bg = color, attrs = {.Bold}}, allocator)
 }
-
+// git's own `%ar`, reproduced from date.c's show_date_relative so the age column
+// agrees with `git tree` exactly. The thresholds are deliberately odd — 90 seconds,
+// 90 minutes, 36 hours, 14 days, then weeks — and each step rounds rather than
+// truncating, which is why "79 minutes ago" is not "1 hour ago".
 graph_relative_time :: proc(timestamp: i64, allocator: runtime.Allocator) -> string {
-	delta := max(time.to_unix_seconds(time.now()) - timestamp, 0)
-	if delta < 60 do return strings.clone("now", allocator)
-	if delta < 60 * 60 do return fmt.aprintf("%dm", delta / 60, allocator = allocator)
-	if delta < 24 * 60 * 60 do return fmt.aprintf("%dh", delta / (60 * 60), allocator = allocator)
-	if delta < 30 * 24 * 60 * 60 do return fmt.aprintf("%dd", delta / (24 * 60 * 60), allocator = allocator)
-	if delta < 365 * 24 * 60 * 60 do return fmt.aprintf("%dmo", delta / (30 * 24 * 60 * 60), allocator = allocator)
-	return fmt.aprintf("%dy", delta / (365 * 24 * 60 * 60), allocator = allocator)
+	unit :: proc(count: i64, name: string, allocator: runtime.Allocator) -> string {
+		if count == 1 do return fmt.aprintf("1 %s ago", name, allocator = allocator)
+		return fmt.aprintf("%d %ss ago", count, name, allocator = allocator)
+	}
+	diff := max(time.to_unix_seconds(time.now()) - timestamp, 0)
+	if diff < 90 do return unit(diff, "second", allocator)
+	diff = (diff + 30) / 60
+	if diff < 90 do return unit(diff, "minute", allocator)
+	diff = (diff + 30) / 60
+	if diff < 36 do return unit(diff, "hour", allocator)
+	diff = (diff + 12) / 24
+	if diff < 14 do return unit(diff, "day", allocator)
+	if diff < 70 do return unit((diff + 3) / 7, "week", allocator)
+	if diff < 365 do return unit((diff + 15) / 30, "month", allocator)
+	if diff < 1825 {
+		total_months := (diff * 12 * 2 + 365) / (365 * 2)
+		years := total_months / 12
+		months := total_months %% 12
+		if months == 0 do return unit(years, "year", allocator)
+		year_text := unit(years, "year", allocator)
+		defer delete(year_text, allocator)
+		// git prints "2 years, 3 months ago", so the leading half drops its "ago".
+		head := year_text[:len(year_text) - len(" ago")]
+		if months == 1 do return fmt.aprintf("%s, 1 month ago", head, allocator = allocator)
+		return fmt.aprintf("%s, %d months ago", head, months, allocator = allocator)
+	}
+	return unit((diff + 183) / 365, "year", allocator)
 }
 
 graph_owned_text :: proc(value: string, style := tui.PLAIN_STYLE) -> tui.Node {
 	return tui.owned_text(value, style)
 }
 
+// `git tree`'s colours, as palette indices so a theme still drives them.
+GRAPH_HASH :: tui.Color{kind = .Indexed, index = 5}
+GRAPH_DATE :: tui.RAMP_TEXT
+GRAPH_AGE :: tui.RAMP_FAINT
+GRAPH_AUTHOR :: tui.RAMP_MUTED
+GRAPH_SUBJECT :: tui.RAMP_BRIGHT
+
+// Ref colouring follows git's `%C(auto)`: HEAD cyan, remotes red, tags yellow,
+// local branches green.
+graph_ref_style :: proc(ref: string) -> tui.Style {
+	if strings.has_prefix(ref, "HEAD") do return tui.Style{fg = tui.indexed_color(6), attrs = {.Bold}}
+	if strings.has_prefix(ref, "tag: ") do return tui.Style{fg = tui.indexed_color(3), attrs = {.Bold}}
+	if strings.contains(ref, "/") do return tui.Style{fg = tui.indexed_color(1), attrs = {.Bold}}
+	return tui.Style{fg = tui.indexed_color(2), attrs = {.Bold}}
+}
+
+// One commit, laid out the way `git tree` lays it out: an identity line carrying
+// hash, date, age, author and refs, the subject on its own line beneath it, and a
+// blank line separating entries. The lane glyphs repeat down all three rows so the
+// graph stays continuous.
 graph_commit_node :: proc(state: ^Graph_Tab, row: ^gitcore.Graph_Row, allocator: runtime.Allocator) -> tui.Node {
 	commit := &state.history.commits[row.commit_index]
-	children := make([dynamic]tui.Node, allocator)
-	defer delete(children)
-	append(&children, tui.priority(tui.transparent(1), 100))
-	graph_lane_nodes(&children, row.cells[:])
 	short_hash := commit.hash[:min(7, len(commit.hash))]
-	append(&children, tui.priority(tui.truncate(tui.text(commit.subject), 0), 20, allocator))
-	for ref in commit.refs {
-		append(&children, tui.priority(tui.text(" "), 60))
-		append(&children, tui.priority(graph_ref_node(ref, row.lane, allocator), 60, allocator))
+
+	head := make([dynamic]tui.Node, allocator)
+	defer delete(head)
+	append(&head, tui.priority(tui.transparent(1), 100))
+	graph_lane_nodes(&head, row.cells[:])
+	append(&head, tui.priority(tui.text(short_hash, tui.Style{fg = GRAPH_HASH, attrs = {.Bold}}), 90))
+	if commit.date != "" {
+		dated := fmt.aprintf(" %s", commit.date, allocator = allocator)
+		append(&head, tui.optional(graph_owned_text(dated, tui.Style{fg = GRAPH_DATE}), 20, allocator))
 	}
-	append(&children, tui.spacer())
 	relative := graph_relative_time(commit.timestamp, allocator)
-	metadata := fmt.aprintf("  %s · %s · %s", short_hash, commit.author, relative, allocator = allocator)
+	age := fmt.aprintf(" (%s)", relative, allocator = allocator)
 	delete(relative)
-	append(&children, tui.priority(tui.truncate(graph_owned_text(metadata, tui.Style{attrs = {.Dim}}), 0), 0, allocator))
-	append(&children, tui.priority(tui.transparent(1), 100))
-	return tui.row(children[:], allocator)
+	append(&head, tui.optional(graph_owned_text(age, tui.Style{fg = GRAPH_AGE}), 60, allocator))
+	author := fmt.aprintf(" %s", commit.author, allocator = allocator)
+	append(&head, tui.optional(graph_owned_text(author, tui.Style{fg = GRAPH_AUTHOR}), 40, allocator))
+	for ref in commit.refs {
+		append(&head, tui.priority(tui.text(" "), 80))
+		append(&head, tui.priority(tui.text(ref, graph_ref_style(ref)), 80))
+	}
+	append(&head, tui.spacer())
+	append(&head, tui.priority(tui.transparent(1), 100))
+
+	// The subject line reuses the lanes with the commit marker replaced, so a merge
+	// still shows every open lane beside its message.
+	body := make([dynamic]tui.Node, allocator)
+	defer delete(body)
+	append(&body, tui.priority(tui.transparent(1), 100))
+	graph_continuation_nodes(&body, row.cells[:], row.lane)
+	append(&body, tui.priority(tui.truncate(tui.text(commit.subject, tui.Style{fg = GRAPH_SUBJECT, attrs = {.Bold}}), 0), 0, allocator))
+	append(&body, tui.spacer())
+	append(&body, tui.priority(tui.transparent(1), 100))
+
+	gap := make([dynamic]tui.Node, allocator)
+	defer delete(gap)
+	append(&gap, tui.priority(tui.transparent(1), 100))
+	graph_continuation_nodes(&gap, row.cells[:], row.lane)
+	append(&gap, tui.spacer())
+
+	return tui.column([]tui.Node{
+		tui.row(head[:], allocator),
+		tui.row(body[:], allocator),
+		tui.row(gap[:], allocator),
+	}, allocator)
+}
+
+// The lane row drawn under a commit: the commit's own marker becomes a vertical,
+// everything else stays as it was.
+graph_continuation_nodes :: proc(children: ^[dynamic]tui.Node, cells: []rune, lane: int) {
+	for cell, index in cells {
+		glyph := cell
+		if index == lane && cell == '●' do glyph = '│'
+		append(children, tui.priority(tui.text(graph_cell_text(glyph), graph_lane_style(index)), 100))
+		append(children, tui.priority(tui.text(" "), 100))
+	}
 }
 
 graph_connector_node :: proc(row: ^gitcore.Graph_Row, allocator: runtime.Allocator) -> tui.Node {
@@ -181,7 +263,7 @@ graph_rows_proc :: proc(data: rawptr, allocator: runtime.Allocator) -> [dynamic]
 			id = id,
 			path = strings.clone(id, allocator),
 			selectable = true,
-			height = 1,
+			height = 3,
 			kind = .Graph_Commit,
 			entry_index = graph_row.commit_index,
 			node = graph_commit_node(state, &graph_row, allocator),

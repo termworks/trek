@@ -3,6 +3,7 @@ package tabs
 import "core:os"
 import "core:path/filepath"
 import "core:testing"
+import "core:time"
 import gitcore "../git"
 import model "../model"
 import tui "../tui"
@@ -434,4 +435,34 @@ test_explorer_remembers_selection_per_directory :: proc(t: ^testing.T) {
 	// And going back in restores the row that was selected down there.
 	returning := tree_reroot(state, child, child)
 	testing.expect_value(t, returning.select_id, leaf)
+}
+
+// The age column has to agree with `git tree`, and git's thresholds are not the
+// obvious ones: it stays in minutes to 90, hours to 36, days to 14, then weeks.
+@(test)
+test_relative_time_matches_git :: proc(t: ^testing.T) {
+	now := time.to_unix_seconds(time.now())
+	check :: proc(t: ^testing.T, now, ago: i64, expect: string) {
+		text := graph_relative_time(now - ago, context.allocator)
+		defer delete(text)
+		testing.expectf(t, text == expect, "%d seconds ago -> %q, wanted %q", ago, text, expect)
+	}
+	check(t, now, 1, "1 second ago")
+	check(t, now, 45, "45 seconds ago")
+	// 90 seconds is where minutes begin, and the conversion rounds.
+	check(t, now, 90, "2 minutes ago")
+	check(t, now, 60 * 79, "79 minutes ago")
+	// Minutes run to 90, so this is still minutes rather than an hour and a half.
+	check(t, now, 60 * 89, "89 minutes ago")
+	check(t, now, 60 * 91, "2 hours ago")
+	// Hours run to 36.
+	check(t, now, 3600 * 35, "35 hours ago")
+	check(t, now, 3600 * 40, "2 days ago")
+	check(t, now, 86400 * 13, "13 days ago")
+	// Then weeks, which trek previously skipped entirely.
+	check(t, now, 86400 * 20, "3 weeks ago")
+	check(t, now, 86400 * 69, "10 weeks ago")
+	check(t, now, 86400 * 200, "7 months ago")
+	check(t, now, 86400 * 400, "1 year, 1 month ago")
+	check(t, now, 86400 * 365 * 6, "6 years ago")
 }
