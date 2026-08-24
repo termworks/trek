@@ -213,10 +213,19 @@ without one is always shown:
 trek.tab("cargo", {
   icon = "C",
   title = "Cargo",
-  when = function(ctx) return ctx.exec({"test", "-f", ctx.root .. "/Cargo.toml"}) ~= nil end,
+  when = function(ctx)
+    local result = ctx.exec({"test", "-f", ctx.root .. "/Cargo.toml"})
+    return result ~= nil and result.success
+  end,
   rows = function(ctx) return { trek.text("  crate") } end,
 })
 ```
+
+`ctx.exec` answers `nil` until the process it started finishes, so a `when` that
+asks one is necessarily wrong the first time it is called. trek asks every tab
+again the moment a background command completes, which is why the predicate tests
+`result.success` rather than "did I get a result" — the latter is true for a
+command that ran and failed.
 
 The built-in Changes and Graph tabs use the same mechanism: both disappear the
 moment you walk out of a repository and come back when you walk into one. A
@@ -240,6 +249,9 @@ trek.tab("todo", {
   rows = function(ctx) ... end,
 })
 ```
+
+A worked example ships in `examples/plugins/tags.lua`: the repository's latest
+tags, in a tab that is there only inside a repository.
 
 Nothing has to be required or merged by hand — the host does the discovery, so a
 config that wants somebody else's tab does not grow shape-checking for it.

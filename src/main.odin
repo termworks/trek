@@ -227,7 +227,10 @@ run_tui :: proc(root: string, options: Options) -> bool {
 	input: [4096]byte
 	for !shell.quit && !tui.terminal_should_exit() {
 		free_all(context.temp_allocator)
-		if luaconfig.engine_poll(&config) do ui.shell_reload(&shell)
+		if luaconfig.engine_poll(&config) {
+			ui.shell_revisit(&shell)
+			ui.shell_reload(&shell)
+		}
 		live_state := live_snapshot(&shell)
 		live.notice(&server, &watch, live_state)
 		live.poll(&server, live_state)

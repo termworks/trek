@@ -86,6 +86,7 @@ lua_tab :: proc(engine: ^luaconfig.Engine, definition: ^luaconfig.Tab_Def, alloc
 		on_focus = lua_focus_proc,
 		on_root = lua_root_proc,
 		visible = lua_visible_proc,
+		revisit = lua_revisit_proc,
 	}
 }
 
@@ -98,6 +99,13 @@ lua_refresh_visible :: proc(state: ^Lua_Tab) -> string {
 	visible, message := luaconfig.engine_tab_visible(state.engine, state.name)
 	state.visible = visible
 	return message
+}
+
+lua_revisit_proc :: proc(data: rawptr) -> Tab_Result {
+	state := (^Lua_Tab)(data)
+	was := state.visible
+	message := lua_refresh_visible(state)
+	return Tab_Result{rows_changed = state.visible != was, message = message, owns_message = message != ""}
 }
 
 lua_root_proc :: proc(data: rawptr, root: string) -> Tab_Result {

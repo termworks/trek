@@ -865,3 +865,17 @@ shell_open_help :: proc(shell: ^Shell) {
 	append(&shell.help_lines, ..shell_help_lines(shell))
 	overlay_help(&shell.overlay, shell.help_lines[:])
 }
+
+// Give every tab a second chance to say whether it belongs in the bar. Called when a
+// background exec finishes, which is the moment a `when` that had to ask a process can
+// finally answer -- and the moment its first, necessarily-pending answer stops binding.
+shell_revisit :: proc(shell: ^Shell) {
+	for &tab in shell.tabs {
+		result := tabpkg.tab_revisit(&tab)
+		if result.message != "" {
+			shell_set_footer(shell, result.message)
+			if result.owns_message do delete(result.message)
+		}
+	}
+	shell_ensure_visible_active(shell)
+}
