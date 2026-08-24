@@ -46,18 +46,21 @@ tree_row_node :: proc(state: ^Tree_Tab, row: ^model.Tree_Row, allocator: runtime
 	// separator; a file takes its own type colour for both, so icon and name always
 	// agree about what the row is.
 	name_style := icon_style
-	name := row.name
+	// The name node owns its string either way, so ownership does not depend on
+	// whether this row happened to be a directory.
+	name := strings.clone(row.name, allocator)
 	if row.is_dir {
 		icon_style = tui.Style{fg = tui.ACCENT}
 		name_style = tui.Style{fg = tui.ACCENT}
+		delete(name, allocator)
 		name = strings.concatenate([]string{row.name, "/"}, allocator)
 	}
 	content := tui.row([]tui.Node{
-		tui.text(tree_guides(row, allocator), tui.Style{fg = tui.RAMP_BORDER, attrs = {.Dim}}),
+		tui.owned_text(tree_guides(row, allocator), tui.Style{fg = tui.RAMP_BORDER, attrs = {.Dim}}),
 		tui.text(chevron, tui.Style{attrs = {.Dim}}),
 		tui.text(icon.glyph, icon_style),
 		tui.text(" "),
-		tui.priority(tui.truncate(tui.text(name, name_style), 0), 0, allocator),
+		tui.priority(tui.truncate(tui.owned_text(name, name_style), 0), 0, allocator),
 		tui.spacer(),
 		tui.transparent(2),
 	}, allocator)
@@ -70,7 +73,7 @@ tree_rows_proc :: proc(data: rawptr, allocator: runtime.Allocator) -> [dynamic]R
 	rows := make([dynamic]Row, 0, len(model_rows), allocator)
 	for &model_row in model_rows {
 		append(&rows, Row{
-			id = model_row.path,
+			id = strings.clone(model_row.path, allocator),
 			path = model_row.path,
 			depth = model_row.depth,
 			selectable = true,

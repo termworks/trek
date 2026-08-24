@@ -78,7 +78,7 @@ run_tui :: proc(root: string) -> bool {
 	if !luaconfig.engine_init(&config, root) ||
 	   !luaconfig.engine_apply_defaults(&config, preferences.hidden, preferences.start_tab) ||
 	   !luaconfig.engine_load_config(&config) {
-		fmt.eprintln("trek: ", config.error)
+		fmt.eprintln("trek:", config.error)
 		luaconfig.engine_destroy(&config)
 		return false
 	}
@@ -183,7 +183,7 @@ main :: proc() {
 	cwd, err := os.get_working_directory(context.allocator)
 	if err != nil {
 		fmt.eprintln("trek: could not determine the working directory")
-		return
+		os.exit(1)
 	}
 	defer delete(cwd)
 	options := parse_options(os.args[1:], cwd)
@@ -196,21 +196,21 @@ main :: proc() {
 		return
 	}
 	if options.error != "" {
-		fmt.eprintln("trek: ", options.error)
-		return
+		fmt.eprintln("trek:", options.error)
+		os.exit(2)
 	}
 	root, path_err := filepath.abs(options.root, context.allocator)
 	if path_err != nil {
 		fmt.eprintln("trek: invalid root path")
-		return
+		os.exit(1)
 	}
 	defer delete(root)
 	info, stat_err := os.stat(root, context.allocator)
 	if stat_err != nil || info.type != .Directory {
 		if stat_err == nil do os.file_info_delete(info, context.allocator)
 		fmt.eprintln("trek: root is not a directory")
-		return
+		os.exit(1)
 	}
 	os.file_info_delete(info, context.allocator)
-	_ = run_tui(root)
+	if !run_tui(root) do os.exit(1)
 }

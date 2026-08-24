@@ -34,9 +34,12 @@ Tab_Heading :: struct {
 	meta:   string,
 }
 
+// A Row owns both strings. They are never aliased: freeing one and hoping the other
+// pointed at it is how the changes tab leaked an id per entry.
 rows_destroy :: proc(rows: ^[dynamic]Row) {
 	for &row in rows {
 		tui.node_destroy(&row.node)
+		delete(row.id)
 		delete(row.path)
 	}
 	delete(rows^)

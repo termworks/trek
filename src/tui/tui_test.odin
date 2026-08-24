@@ -92,3 +92,59 @@ test_node_regions_are_hit_tested :: proc(t: ^testing.T) {
 	_, outside := region_at(&layout, 5, 0)
 	testing.expect(t, !outside)
 }
+
+// A terminal hands the decoder whatever arrives: truncated escapes split across
+// reads, invalid UTF-8, and stray control bytes. None of it may crash, hang, or
+// leave the decoder holding memory.
+@(test)
+test_decoder_survives_malformed_input :: proc(t: ^testing.T) {
+	cases := [?]string{
+		"\x1b",
+		"\x1b[",
+		"\x1b[<",
+		"\x1b[<0;1",
+		"\x1b[<999999999;999999999;999999999M",
+		"\x1b[200~unterminated paste",
+		"\x1bOO\x1b\x1b\x1b",
+		"\xff\xfe\xfd",
+		"\xc0\x80\xe0\x80\x80",
+		"\x00\x01\x02\x7f",
+		"\x1b[999999999999999999999m",
+	}
+	for value in cases {
+		decoder: Decoder
+		decoder_init(&decoder)
+		events := decoder_feed(&decoder, transmute([]byte)value)
+		events_destroy(&events)
+		decoder_destroy(&decoder)
+	}
+}
+
+// The same sequence delivered one byte at a time must not behave differently from
+// one delivered whole: a partial escape is state the decoder has to carry.
+@(test)
+test_decoder_handles_split_sequences :: proc(t: ^testing.T) {
+	whole: Decoder
+	decoder_init(&whole)
+	defer decoder_destroy(&whole)
+	sequence := "\x1b[A\x1b[<0;10;5M"
+	full := decoder_feed(&whole, transmute([]byte)sequence)
+	defer events_destroy(&full)
+
+	split: Decoder
+	decoder_init(&split)
+	defer decoder_destroy(&split)
+	drip := make([dynamic]Event)
+	defer events_destroy(&drip)
+	for index in 0 ..< len(sequence) {
+		piece := decoder_feed(&split, transmute([]byte)sequence[index:index + 1])
+		append(&drip, ..piece[:])
+		delete(piece)
+	}
+	testing.expect_value(t, len(drip), len(full))
+	for event, index in drip {
+		if index >= len(full) do break
+		testing.expect_value(t, event.kind, full[index].kind)
+	}
+	testing.expect_value(t, len(split.pending), 0)
+}

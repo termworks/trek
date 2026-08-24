@@ -64,7 +64,7 @@ changes_row_id :: proc(format: string, args: ..any, allocator := context.allocat
 }
 
 changes_owned_text :: proc(value: string, style := tui.PLAIN_STYLE) -> tui.Node {
-	return tui.text(value, style)
+	return tui.owned_text(value, style)
 }
 
 // Untracked files are the New list; everything else unstaged is Modified.
@@ -112,7 +112,7 @@ changes_message_node :: proc(state: ^Changes_Tab, allocator: runtime.Allocator) 
 	message := string(state.message[:])
 	content := tui.text(message)
 	if message == "" {
-		content = changes_owned_text("Commit message", tui.Style{fg = tui.RAMP_FAINT, attrs = {.Dim, .Italic}})
+		content = tui.text("Commit message", tui.Style{fg = tui.RAMP_FAINT, attrs = {.Dim, .Italic}})
 	}
 	return tui.column([]tui.Node{
 		tui.row([]tui.Node{tui.text("┌", border), tui.fill('─', border), tui.text("┐", border)}, allocator),
@@ -149,7 +149,7 @@ changes_append_section :: proc(
 	header := changes_row_id("section:%v", section, allocator = allocator)
 	append(rows, Row{
 		id = header,
-		path = header,
+		path = strings.clone(header, allocator),
 		selectable = false,
 		height = 1,
 		kind = .Section_Header,
@@ -174,7 +174,7 @@ changes_rows_proc :: proc(data: rawptr, allocator: runtime.Allocator) -> [dynami
 	rows := make([dynamic]Row, allocator)
 	if !state.has_repo {
 		id := strings.clone(" Not a git repository", allocator)
-		append(&rows, Row{id = id, path = id, selectable = false, height = 1, node = tui.text(id, tui.Style{fg = tui.RAMP_FAINT, attrs = {.Dim}})})
+		append(&rows, Row{id = id, path = strings.clone(id, allocator), selectable = false, height = 1, node = tui.text(id, tui.Style{fg = tui.RAMP_FAINT, attrs = {.Dim}})})
 		return rows
 	}
 	fresh := make([dynamic]gitcore.File_Entry, allocator)
@@ -193,14 +193,14 @@ changes_rows_proc :: proc(data: rawptr, allocator: runtime.Allocator) -> [dynami
 	changes_append_section(state, &rows, .Staged, "STAGED", state.status.staged[:], allocator)
 	if len(rows) == 0 {
 		id := strings.clone(" Working tree clean", allocator)
-		append(&rows, Row{id = id, path = id, selectable = false, height = 1, node = tui.text(id, tui.Style{fg = tui.RAMP_FAINT, attrs = {.Dim}})})
+		append(&rows, Row{id = id, path = strings.clone(id, allocator), selectable = false, height = 1, node = tui.text(id, tui.Style{fg = tui.RAMP_FAINT, attrs = {.Dim}})})
 	}
 	spacer_id := changes_row_id("spacer", allocator = allocator)
-	append(&rows, Row{id = spacer_id, path = spacer_id, selectable = false, height = 1, node = tui.text("")})
+	append(&rows, Row{id = spacer_id, path = strings.clone(spacer_id, allocator), selectable = false, height = 1, node = tui.text("")})
 	box_id := changes_row_id("message", allocator = allocator)
 	append(&rows, Row{
 		id = box_id,
-		path = box_id,
+		path = strings.clone(box_id, allocator),
 		selectable = true,
 		height = 3,
 		kind = .Commit_Box,
@@ -210,7 +210,7 @@ changes_rows_proc :: proc(data: rawptr, allocator: runtime.Allocator) -> [dynami
 	button_id := changes_row_id("commit", allocator = allocator)
 	append(&rows, Row{
 		id = button_id,
-		path = button_id,
+		path = strings.clone(button_id, allocator),
 		selectable = true,
 		height = 1,
 		kind = .Commit_Button,

@@ -20,7 +20,7 @@ lua_rows_proc :: proc(data: rawptr, allocator: runtime.Allocator) -> [dynamic]Ro
 		id := strings.clone("lua:error", allocator)
 		node := tui.text(message)
 		node.owns_values = true
-		append(&rows, Row{id = id, path = id, height = 1, node = node})
+		append(&rows, Row{id = id, path = strings.clone(id, allocator), height = 1, node = node})
 		delete(nodes)
 		return rows
 	}
@@ -28,7 +28,7 @@ lua_rows_proc :: proc(data: rawptr, allocator: runtime.Allocator) -> [dynamic]Ro
 		id := fmt.aprintf("lua:%s:%d", state.name, index, allocator = allocator)
 		append(&rows, Row{
 			id = id,
-			path = id,
+			path = strings.clone(id, allocator),
 			selectable = true,
 			height = max(tui.node_height(&node), 1),
 			node = node,

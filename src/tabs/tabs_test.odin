@@ -269,3 +269,49 @@ test_graph_lane_survives_narrow_metadata :: proc(t: ^testing.T) {
 	testing.expect(t, ok)
 	testing.expect_value(t, cell.rune, '●')
 }
+
+// rows_destroy frees id and path independently, so no row may point both at one
+// allocation. Aliasing them is a double free that the tracking allocator tolerates
+// and glibc aborts on, which makes it a crash only in the real binary.
+expect_distinct_strings :: proc(t: ^testing.T, rows: []Row, label: string) {
+	for row in rows {
+		if len(row.id) == 0 || len(row.path) == 0 do continue
+		testing.expectf(
+			t,
+			raw_data(row.id) != raw_data(row.path),
+			"%s row %q aliases id and path",
+			label,
+			row.id,
+		)
+	}
+}
+
+@(test)
+test_rows_never_alias_id_and_path :: proc(t: ^testing.T) {
+	root := tabs_test_repo(t)
+	defer { _ = os.remove_all(root); delete(root) }
+	dir := tabs_test_join(root, "src")
+	defer delete(dir)
+	_ = os.make_directory(dir)
+	untracked := tabs_test_join(root, "fresh.txt")
+	defer delete(untracked)
+	_ = os.write_entire_file_from_string(untracked, "x")
+
+	tree := tree_tab_new(root)
+	defer tree_destroy_proc(rawptr(tree))
+	tree_rows := tree_rows_proc(rawptr(tree), context.allocator)
+	defer rows_destroy(&tree_rows)
+	expect_distinct_strings(t, tree_rows[:], "tree")
+
+	changes := changes_new(root)
+	defer changes_destroy_proc(rawptr(changes))
+	changes_rows := changes_rows_proc(rawptr(changes), context.allocator)
+	defer rows_destroy(&changes_rows)
+	expect_distinct_strings(t, changes_rows[:], "changes")
+
+	graph := graph_new(root)
+	defer graph_destroy_proc(rawptr(graph))
+	graph_rows := graph_rows_proc(rawptr(graph), context.allocator)
+	defer rows_destroy(&graph_rows)
+	expect_distinct_strings(t, graph_rows[:], "graph")
+}

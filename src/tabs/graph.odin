@@ -27,15 +27,20 @@ graph_clear :: proc(state: ^Graph_Tab) {
 
 graph_refresh :: proc(state: ^Graph_Tab) {
 	graph_clear(state)
+	// git's stderr is diagnostic text for a developer, not UI copy: it leaks absolute
+	// paths and internal advice ("detected dubious ownership in repository at ...")
+	// straight into the pane. Report a fixed message and drop the raw output.
 	repo, message, ok := gitcore.discover(state.root, state.allocator)
+	delete(message)
 	if !ok {
-		state.message = message
+		state.message = strings.clone(" Not a git repository", state.allocator)
 		return
 	}
 	state.repo = repo
 	history, history_message, history_ok := gitcore.repo_history(&state.repo, state.allocator)
+	delete(history_message)
 	if !history_ok {
-		state.message = history_message
+		state.message = strings.clone(" Could not read commit history", state.allocator)
 		return
 	}
 	state.history = history
@@ -51,13 +56,15 @@ graph_new :: proc(root: string, allocator := context.allocator) -> ^Graph_Tab {
 }
 
 graph_lane_style :: proc(lane: int) -> tui.Style {
+	// Lane colours cycle through the ANSI 16 so a themed palette drives them, the same
+	// way every other colour in trek is an index rather than a baked hex.
 	styles := [?]tui.Style{
-		{fg = tui.rgb(0x73, 0xc9, 0x91), bg = tui.DEFAULT_COLOR},
-		{fg = tui.rgb(0x6c, 0xae, 0xe4), bg = tui.DEFAULT_COLOR},
-		{fg = tui.rgb(0xe2, 0xc0, 0x8d), bg = tui.DEFAULT_COLOR},
-		{fg = tui.rgb(0xd1, 0x8c, 0xd1), bg = tui.DEFAULT_COLOR},
-		{fg = tui.rgb(0xe4, 0x67, 0x6b), bg = tui.DEFAULT_COLOR},
-		{fg = tui.rgb(0x68, 0xc5, 0xcc), bg = tui.DEFAULT_COLOR},
+		{fg = tui.indexed_color(2), bg = tui.DEFAULT_COLOR},
+		{fg = tui.indexed_color(4), bg = tui.DEFAULT_COLOR},
+		{fg = tui.indexed_color(3), bg = tui.DEFAULT_COLOR},
+		{fg = tui.indexed_color(5), bg = tui.DEFAULT_COLOR},
+		{fg = tui.indexed_color(6), bg = tui.DEFAULT_COLOR},
+		{fg = tui.indexed_color(1), bg = tui.DEFAULT_COLOR},
 	}
 	return styles[lane % len(styles)]
 }
@@ -90,12 +97,12 @@ graph_ref_node :: proc(ref: string, lane: int, allocator: runtime.Allocator) -> 
 	if strings.has_prefix(label, "HEAD -> ") do label = label[len("HEAD -> "):]
 	color := graph_lane_style(lane).fg
 	if strings.has_prefix(label, "tag: ") do color = tui.STATUS_MODIFIED
-	if strings.contains(label, "origin/") do color = tui.rgb(0x6c, 0xae, 0xe4)
+	if strings.contains(label, "origin/") do color = tui.indexed_color(4)
 	return tui.styled(tui.row([]tui.Node{
 		tui.text(" "),
 		tui.text(label),
 		tui.text(" "),
-	}, allocator), tui.Style{fg = tui.rgb(0x18, 0x1a, 0x1f), bg = color, attrs = {.Bold}}, allocator)
+	}, allocator), tui.Style{fg = tui.BG, bg = color, attrs = {.Bold}}, allocator)
 }
 
 graph_relative_time :: proc(timestamp: i64, allocator: runtime.Allocator) -> string {
@@ -109,9 +116,7 @@ graph_relative_time :: proc(timestamp: i64, allocator: runtime.Allocator) -> str
 }
 
 graph_owned_text :: proc(value: string, style := tui.PLAIN_STYLE) -> tui.Node {
-	node := tui.text(value, style)
-	node.owns_values = true
-	return node
+	return tui.owned_text(value, style)
 }
 
 graph_commit_node :: proc(state: ^Graph_Tab, row: ^gitcore.Graph_Row, allocator: runtime.Allocator) -> tui.Node {
@@ -148,12 +153,12 @@ graph_rows_proc :: proc(data: rawptr, allocator: runtime.Allocator) -> [dynamic]
 	rows := make([dynamic]Row, allocator)
 	if state.message != "" {
 		id := strings.clone(state.message, allocator)
-		append(&rows, Row{id = id, path = id, height = 1, node = tui.text(state.message)})
+		append(&rows, Row{id = id, path = strings.clone(id, allocator), height = 1, node = tui.owned_text(strings.clone(state.message, allocator), tui.Style{fg = tui.RAMP_FAINT, attrs = {.Dim}})})
 		return rows
 	}
 	if len(state.history.commits) == 0 {
 		id := strings.clone("No commits", allocator)
-		append(&rows, Row{id = id, path = id, height = 1, node = tui.text(" No commits")})
+		append(&rows, Row{id = id, path = strings.clone(id, allocator), height = 1, node = tui.text(" No commits")})
 		return rows
 	}
 	for &graph_row, index in state.graph.rows {
@@ -161,7 +166,7 @@ graph_rows_proc :: proc(data: rawptr, allocator: runtime.Allocator) -> [dynamic]
 			id := fmt.aprintf("connector:%d", index, allocator = allocator)
 			append(&rows, Row{
 				id = id,
-				path = id,
+				path = strings.clone(id, allocator),
 				height = 1,
 				node = graph_connector_node(&graph_row, allocator),
 			})
@@ -171,7 +176,7 @@ graph_rows_proc :: proc(data: rawptr, allocator: runtime.Allocator) -> [dynamic]
 		id := strings.clone(commit.hash, allocator)
 		append(&rows, Row{
 			id = id,
-			path = id,
+			path = strings.clone(id, allocator),
 			selectable = true,
 			height = 1,
 			kind = .Graph_Commit,

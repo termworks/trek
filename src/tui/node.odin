@@ -52,6 +52,13 @@ text :: proc(value: string, style := PLAIN_STYLE) -> Node {
 	return Node{kind = .Text, value = value, style = style}
 }
 
+// Text whose string was allocated for this node alone. node_destroy frees it, so a
+// computed label must come through here: `text` borrows, and a borrowed computed
+// string is a leak on every rebuild.
+owned_text :: proc(value: string, style := PLAIN_STYLE) -> Node {
+	return Node{kind = .Text, value = value, style = style, owns_values = true}
+}
+
 row :: proc(children: []Node, allocator := context.allocator) -> Node {
 	return Node{kind = .Row, children = nodes_copy(children, allocator)}
 }

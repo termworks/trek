@@ -92,6 +92,9 @@ overlay_key :: proc(overlay: ^Overlay, key: tui.Key) -> Overlay_Result {
 	}
 	switch overlay.kind {
 	case .Menu:
+		// `q` closes the menu the way it closes everything else. Without this the
+		// only way out is Esc, and a menu is the one place a stuck user cannot quit.
+		if key.code == .Rune && key.rune == 'q' do return Overlay_Result{dismiss = true}
 		if key.code == .Up do overlay.selected = max(overlay.selected - 1, 0)
 		if key.code == .Down do overlay.selected = min(overlay.selected + 1, len(overlay.entries) - 1)
 		if key.code == .Enter && len(overlay.entries) > 0 {
