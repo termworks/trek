@@ -11,7 +11,7 @@ import tui "../tui"
 // The activity bar is a column down the left edge, VS Code style. Each tab owns a
 // slot ACTIVITY_SLOT rows tall with its glyph on the middle row, so the icons read
 // as a spaced column rather than a stack.
-ACTIVITY_WIDTH :: 4
+ACTIVITY_WIDTH :: 3
 ACTIVITY_SLOT :: 2
 // One blank column between the activity strip and the content, so rows do not butt
 // straight against the bar.
