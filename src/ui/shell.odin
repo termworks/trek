@@ -19,6 +19,13 @@ CONTENT_GUTTER :: 1
 HEADER_HEIGHT :: 1
 FOOTER_HEIGHT :: 1
 
+// The footer is only there when it has something to say. A permanent hint line at
+// the bottom of a file tree is a row of chrome the reader stops seeing but keeps
+// paying for, so it collapses when the message is empty.
+shell_footer_height :: proc(shell: ^Shell) -> int {
+	return shell.footer == "" ? 0 : 1
+}
+
 Shell :: struct {
 	tabs:       [dynamic]tabpkg.Tab,
 	active:     int,
@@ -31,6 +38,8 @@ Shell :: struct {
 	content_width: int,
 	// Whether the pointer is over the scrollbar column.
 	hover_scrollbar: bool,
+	help_lines: [dynamic]string,
+	hover_help: bool,
 	snap:       bool,
 	footer:     string,
 	overlay:    Overlay,
@@ -46,10 +55,12 @@ shell_init :: proc(shell: ^Shell, allocator := context.allocator) {
 	shell.tabs = make([dynamic]tabpkg.Tab, allocator)
 	shell.rows = make([dynamic]tabpkg.Row, allocator)
 	shell.menu_entries = make([dynamic]model.Menu_Entry, allocator)
+	shell.help_lines = make([dynamic]string, allocator)
 	shell.selected = -1
 	shell.hover = -1
 	shell.hover_tab = -1
-	shell.footer = strings.clone(" m / right-click: menu", allocator)
+	shell.hover_help = false
+	shell.footer = strings.clone("", allocator)
 	overlay_init(&shell.overlay, allocator)
 }
 
@@ -65,6 +76,7 @@ shell_destroy :: proc(shell: ^Shell) {
 	delete(shell.footer)
 	shell_clear_menu(shell)
 	delete(shell.menu_entries)
+	delete(shell.help_lines)
 	overlay_destroy(&shell.overlay)
 	shell^ = {}
 }
@@ -208,6 +220,7 @@ shell_switch_tab :: proc(shell: ^Shell, index: int) {
 	shell.scroll = 0
 	shell.hover = -1
 	shell.hover_tab = -1
+	shell.hover_help = false
 	result := tabpkg.tab_focus(shell_active_tab(shell))
 	if result.message != "" do shell_set_footer(shell, result.message)
 	if result.quit do shell.quit = true
@@ -415,6 +428,10 @@ shell_key :: proc(shell: ^Shell, key: tui.Key, viewport: int) {
 		}
 		return
 	}
+	if key.code == .Rune && key.rune == '?' {
+		shell_open_help(shell)
+		return
+	}
 	if key.code == .Rune && key.rune >= '1' && key.rune <= '9' {
 		// Numbers address slots in the bar, so they stay stable with what is on screen
 		// rather than counting hidden tabs.
@@ -441,7 +458,7 @@ shell_paste :: proc(shell: ^Shell, value: string) {
 }
 
 shell_mouse :: proc(shell: ^Shell, mouse: tui.Mouse_Event, width, height: int) {
-	viewport := shell_viewport_height(height)
+	viewport := shell_viewport_height(shell, height)
 	if mouse.action == .Scroll_Up {
 		shell_wheel(shell, -3, viewport)
 		return
@@ -464,14 +481,20 @@ shell_mouse :: proc(shell: ^Shell, mouse: tui.Mouse_Event, width, height: int) {
 				return
 			}
 		}
+		shell.hover_help = mouse.y == shell_help_row(shell, height)
+		if shell.hover_help && mouse.action == .Press {
+			shell_open_help(shell)
+			return
+		}
 		return
 	}
 	shell.hover_tab = -1
+	shell.hover_help = false
 	// The scrollbar sits in the last column; give it a two-column grab zone, since a
 	// one-column target is hard to hit deliberately with a mouse.
-	shell.hover_scrollbar = mouse.x >= width - 2 && shell_total_height(shell) > shell_viewport_height(height)
+	shell.hover_scrollbar = mouse.x >= width - 2 && shell_total_height(shell) > shell_viewport_height(shell, height)
 	body_top := HEADER_HEIGHT
-	if mouse.y < body_top || mouse.y >= height - FOOTER_HEIGHT do return
+	if mouse.y < body_top || mouse.y >= height - shell_footer_height(shell) do return
 	index := shell_row_at_line(shell, shell.scroll + mouse.y - body_top)
 	if mouse.action == .Move {
 		shell.hover = index
@@ -496,7 +519,7 @@ shell_cursor_position :: proc(shell: ^Shell, width, height: int) -> (int, int, b
 	row := shell_selected_row(shell)
 	if row == nil || row.kind != .Commit_Box do return 0, 0, false
 	line := shell_row_top(shell, shell.selected) - shell.scroll + HEADER_HEIGHT
-	if line < HEADER_HEIGHT || line + 1 >= height - FOOTER_HEIGHT do return 0, 0, false
+	if line < HEADER_HEIGHT || line + 1 >= height - shell_footer_height(shell) do return 0, 0, false
 	column := min(tui.text_width(row.input_value), max(width - ACTIVITY_WIDTH - CONTENT_GUTTER - 5, 0))
 	return ACTIVITY_WIDTH + CONTENT_GUTTER + 1 + column, line + 1, true
 }
@@ -505,8 +528,8 @@ fill_rect :: proc(buffer: ^tui.Buffer, rect: tui.Rect, style: tui.Style) {
 	tui.buffer_fill(buffer, rect, style)
 }
 
-shell_viewport_height :: proc(height: int) -> int {
-	return max(height - HEADER_HEIGHT - FOOTER_HEIGHT, 0)
+shell_viewport_height :: proc(shell: ^Shell, height: int) -> int {
+	return max(height - HEADER_HEIGHT - shell_footer_height(shell), 0)
 }
 
 shell_tab_icon :: proc(shell: ^Shell, index: int) -> string {
@@ -566,7 +589,7 @@ shell_ensure_visible_active :: proc(shell: ^Shell) {
 }
 
 shell_activity_origin :: proc(shell: ^Shell, height: int) -> int {
-	usable := max(height - FOOTER_HEIGHT - 2, 0)
+	usable := max(height - shell_footer_height(shell) - 2, 0)
 	block := shell_visible_count(shell) * ACTIVITY_SLOT
 	return max((usable - block) / 2, 0)
 }
@@ -606,6 +629,11 @@ shell_draw_capsule :: proc(buffer: ^tui.Buffer, middle: int, icon: string, colou
 	shell_draw_icon(buffer, middle, icon, tui.Style{fg = tui.RAMP_BRIGHT, bg = colour})
 }
 
+// Row of the "?" button at the foot of the strip.
+shell_help_row :: proc(shell: ^Shell, height: int) -> int {
+	return max(height - shell_footer_height(shell) - 2, 0)
+}
+
 shell_draw_activity :: proc(shell: ^Shell, buffer: ^tui.Buffer) {
 	fill_rect(buffer, tui.Rect{x = 0, y = 0, width = ACTIVITY_WIDTH, height = buffer.height}, tui.Style{bg = tui.ACTIVITY_BG})
 	slots := shell_visible_count(shell)
@@ -624,6 +652,11 @@ shell_draw_activity :: proc(shell: ^Shell, buffer: ^tui.Buffer) {
 	if active_slot := shell_slot_of(shell, shell.active); active_slot >= 0 {
 		top, _ := shell_activity_bounds(shell, active_slot, buffer.height)
 		shell_draw_capsule(buffer, top + ACTIVITY_SLOT / 2, shell_tab_icon(shell, shell.active), tui.ACTIVITY_ACTIVE_BG)
+	}
+	if help_y := shell_help_row(shell, buffer.height); help_y > 0 {
+		style := tui.Style{fg = shell.hover_help ? tui.RAMP_BRIGHT : tui.RAMP_MUTED, bg = tui.ACTIVITY_BG}
+		if !shell.hover_help do style.attrs = {.Dim}
+		shell_draw_icon(buffer, help_y, "?", style)
 	}
 }
 
@@ -665,7 +698,7 @@ shell_draw_header :: proc(shell: ^Shell, buffer: ^tui.Buffer, tab: ^tabpkg.Tab) 
 shell_render :: proc(shell: ^Shell, buffer: ^tui.Buffer, layout: ^tui.Layout) {
 	tui.buffer_clear(buffer)
 	tui.layout_clear(layout)
-	if buffer.width < ACTIVITY_WIDTH + CONTENT_GUTTER + 8 || buffer.height < HEADER_HEIGHT + FOOTER_HEIGHT do return
+	if buffer.width < ACTIVITY_WIDTH + CONTENT_GUTTER + 8 || buffer.height < HEADER_HEIGHT + 1 do return
 	selected_style := tui.Style{fg = tui.DEFAULT_COLOR, bg = tui.SELECTED_BG, attrs = {.Bold}}
 	hover_style := tui.Style{fg = tui.DEFAULT_COLOR, bg = tui.HOVER_BG}
 	shell_draw_activity(shell, buffer)
@@ -681,8 +714,8 @@ shell_render :: proc(shell: ^Shell, buffer: ^tui.Buffer, layout: ^tui.Layout) {
 		shell_reload(shell)
 	}
 	body_top := HEADER_HEIGHT
-	footer_y := buffer.height - FOOTER_HEIGHT
-	viewport := shell_viewport_height(buffer.height)
+	footer_y := buffer.height - shell_footer_height(shell)
+	viewport := shell_viewport_height(shell, buffer.height)
 	total := shell_total_height(shell)
 	body_width := content_width
 	if total > viewport do body_width = max(body_width - 1, 0)
@@ -771,4 +804,64 @@ shell_apply_selection :: proc(shell: ^Shell, result: tabpkg.Tab_Result) {
 			return
 		}
 	}
+}
+
+// The shortcut list, grouped. A line starting with a space is an entry; anything
+// else is a heading, which is how the renderer tells them apart.
+SHELL_HELP_COMMON := []string{
+	"Move",
+	"  ↑ ↓        move the cursor",
+	"  PgUp PgDn  page",
+	"  Tab 1-9    switch panel",
+	"",
+	"Act",
+	"  ⏎          open, or toggle a folder",
+	"  m          menu for the selected row",
+	"  ?          this list",
+	"  q          quit",
+}
+
+SHELL_HELP_TREE := []string{
+	"",
+	"Explorer",
+	"  a          tree / explorer mode",
+	"  → ←        enter a folder / go up",
+	"  .          hidden files",
+	"  r          reread the folder",
+	"  c          collapse everything",
+}
+
+SHELL_HELP_CHANGES := []string{
+	"",
+	"Changes",
+	"  ⏎          stage, or unstage a staged file",
+	"  ⏎ in box   commit what is staged",
+	"  r          refresh",
+}
+
+SHELL_HELP_GRAPH := []string{
+	"",
+	"Graph",
+	"  r          reread the history",
+}
+
+shell_help_lines :: proc(shell: ^Shell, allocator := context.temp_allocator) -> []string {
+	lines := make([dynamic]string, allocator)
+	append(&lines, ..SHELL_HELP_COMMON)
+	tab := shell_active_tab(shell)
+	if tab != nil {
+		switch tab.name {
+		case "tree": append(&lines, ..SHELL_HELP_TREE)
+		case "changes": append(&lines, ..SHELL_HELP_CHANGES)
+		case "graph": append(&lines, ..SHELL_HELP_GRAPH)
+		}
+	}
+	return lines[:]
+}
+
+// The overlay borrows the slice, so the shell owns the storage and reuses it.
+shell_open_help :: proc(shell: ^Shell) {
+	clear(&shell.help_lines)
+	append(&shell.help_lines, ..shell_help_lines(shell))
+	overlay_help(&shell.overlay, shell.help_lines[:])
 }

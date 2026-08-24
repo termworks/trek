@@ -3,6 +3,7 @@ package ui
 import "base:runtime"
 import "core:fmt"
 import "core:os"
+import "core:strings"
 import "core:path/filepath"
 import "core:testing"
 import model "../model"
@@ -256,4 +257,63 @@ test_scrollbar_mirrors_the_activity_strip :: proc(t: ^testing.T) {
 	// Moving back into the content releases it.
 	shell_mouse(&shell, tui.Mouse_Event{x = ACTIVITY_WIDTH + CONTENT_GUTTER, y = HEADER_HEIGHT, action = .Move}, buffer.width, buffer.height)
 	testing.expect(t, !shell.hover_scrollbar)
+}
+
+// The footer is not a permanent hint line: it exists only while something is being
+// said, and gives the row back to the content otherwise.
+@(test)
+test_footer_collapses_when_silent :: proc(t: ^testing.T) {
+	shell: Shell
+	shell_init(&shell)
+	defer shell_destroy(&shell)
+	shell_add_tab(&shell, fake_tab("tree"))
+	testing.expect_value(t, shell_footer_height(&shell), 0)
+	quiet := shell_viewport_height(&shell, 20)
+	shell_set_footer(&shell, "staged")
+	testing.expect_value(t, shell_footer_height(&shell), 1)
+	testing.expect_value(t, shell_viewport_height(&shell, 20), quiet - 1)
+}
+
+// Every dialog is the same centred panel, so one lands where the last one did.
+@(test)
+test_dialogs_share_a_centred_panel :: proc(t: ^testing.T) {
+	kinds := [?]Overlay_Kind{.Menu, .Prompt, .Confirm, .Help}
+	for kind in kinds {
+		overlay: Overlay
+		overlay_init(&overlay)
+		defer overlay_destroy(&overlay)
+		switch kind {
+		case .Menu: overlay_menu(&overlay, "Actions", model.TREE_FILE_MENU[:])
+		case .Prompt: overlay_prompt(&overlay, "Rename", .Rename, "name")
+		case .Confirm: overlay_confirm(&overlay, "Delete permanently?", .Delete)
+		case .Help: overlay_help(&overlay, []string{"Move", "  ↑ ↓  move"})
+		case .None:
+		}
+		rect := overlay_rect(&overlay, 100, 40)
+		left := rect.x
+		right := 100 - (rect.x + rect.width)
+		top := rect.y
+		bottom := 40 - (rect.y + rect.height)
+		// Centred to within a column of rounding on each axis.
+		testing.expectf(t, abs(left - right) <= 1, "%v not centred horizontally", kind)
+		testing.expectf(t, abs(top - bottom) <= 1, "%v not centred vertically", kind)
+	}
+}
+
+@(test)
+test_help_lists_shortcuts_for_the_active_tab :: proc(t: ^testing.T) {
+	shell: Shell
+	shell_init(&shell)
+	defer shell_destroy(&shell)
+	shell_add_tab(&shell, fake_tab("tree"))
+	shell_key(&shell, tui.Key{code = .Rune, rune = '?'}, 12)
+	testing.expect_value(t, shell.overlay.kind, Overlay_Kind.Help)
+	joined := strings.concatenate(shell.overlay.help, context.allocator)
+	defer delete(joined)
+	// The common keys plus the ones only the tree has.
+	testing.expect(t, strings.contains(joined, "quit"))
+	testing.expect(t, strings.contains(joined, "tree / explorer mode"))
+	// And it closes on the key that opened it.
+	shell_key(&shell, tui.Key{code = .Rune, rune = '?'}, 12)
+	testing.expect_value(t, shell.overlay.kind, Overlay_Kind.None)
 }

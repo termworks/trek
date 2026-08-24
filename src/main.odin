@@ -251,7 +251,7 @@ run_tui :: proc(root: string, options: Options) -> bool {
 						delete(message)
 					}
 				} else {
-					ui.shell_key(&shell, event.key, ui.shell_viewport_height(content.height))
+					ui.shell_key(&shell, event.key, ui.shell_viewport_height(&shell, content.height))
 				}
 				ui.shell_apply_lua_pending(&shell)
 				if !run_suspended(&config, &terminal, &buffer) do return false

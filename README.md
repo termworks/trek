@@ -61,8 +61,14 @@ Core keys:
 | `r` | refresh directory listings |
 | `c` | collapse every folder |
 | `m` / right click | open the context menu |
+| `?` | shortcut list |
 | `1`…`9` | switch tabs |
 | `q` | quit |
+
+The activity strip carries a `?` at its foot; it and the `?` key open the shortcut
+list. Every dialog — the context menu, a rename prompt, a delete confirmation and
+that list — is the same centred panel. There is no permanent hint line: the footer
+appears only while trek has something to report and gives the row back otherwise.
 
 Mouse-wheel scrolling changes only the viewport; it never moves the selected
 row. Keyboard navigation brings the selection back into view.
