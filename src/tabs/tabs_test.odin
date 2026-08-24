@@ -520,3 +520,18 @@ test_wrapped_tree_row_keeps_guides :: proc(t: ^testing.T) {
 	// Both occupy the same columns, so a wrapped name never shifts sideways.
 	testing.expect_value(t, tui.text_width(middle_guides), tui.text_width(last_guides))
 }
+
+// Refs are what you scan a graph for, so they are chips: the name sits on the colour
+// rather than being drawn in it, with git's own colour per ref kind.
+@(test)
+test_graph_refs_render_as_chips :: proc(t: ^testing.T) {
+	testing.expect_value(t, graph_ref_colour("HEAD -> main"), tui.indexed_color(6))
+	testing.expect_value(t, graph_ref_colour("tag: v1.0.0"), tui.indexed_color(3))
+	testing.expect_value(t, graph_ref_colour("origin/main"), tui.indexed_color(1))
+	testing.expect_value(t, graph_ref_colour("feature-work"), tui.indexed_color(2))
+
+	label := graph_ref_label("tag: v1.0.0", context.allocator)
+	defer delete(label)
+	testing.expect(t, strings.has_suffix(label, "v1.0.0"))
+	testing.expect(t, !strings.contains(label, "tag: "))
+}

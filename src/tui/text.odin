@@ -282,3 +282,84 @@ wrap_after :: proc(value: string, width: int, breakers: string, allocator := con
 wrap_name :: proc(value: string, width: int, allocator := context.allocator) -> [dynamic]string {
 	return wrap_after(value, width, "-_./", allocator)
 }
+
+// A run of text with its own style. Wrapping a paragraph built from these keeps the
+// styling: a plain string wrap can only paint a whole line one colour.
+Span :: struct {
+	text:  string,
+	style: Style,
+	// Never split this span across lines. A ref chip reads as one object, and half a
+	// chip at the end of a line reads as damage.
+	atomic: bool,
+}
+
+@(private = "file")
+push_span :: proc(line: ^[dynamic]Span, text: string, style: Style, allocator: runtime.Allocator) {
+	append(line, Span{text = strings.clone(text, allocator), style = style})
+}
+
+// Word-wrap a styled paragraph. Spans flow into each other exactly as their text
+// would, and every output line owns its strings.
+wrap_spans :: proc(spans: []Span, width: int, allocator := context.allocator) -> [dynamic][dynamic]Span {
+	lines := make([dynamic][dynamic]Span, allocator)
+	current := make([dynamic]Span, allocator)
+	used := 0
+	flush :: proc(lines: ^[dynamic][dynamic]Span, current: ^[dynamic]Span, used: ^int, allocator: runtime.Allocator) {
+		append(lines, current^)
+		current^ = make([dynamic]Span, allocator)
+		used^ = 0
+	}
+	for span in spans {
+		if span.text == "" do continue
+		pieces := make([dynamic]string, context.temp_allocator)
+		if span.atomic {
+			append(&pieces, span.text)
+		} else {
+			remaining := span.text
+			for word in strings.split_iterator(&remaining, " ") {
+				if word != "" do append(&pieces, word)
+			}
+		}
+		for piece in pieces {
+			piece_width := text_width(piece)
+			if used > 0 && used + 1 + piece_width > width {
+				flush(&lines, &current, &used, allocator)
+			}
+			if used > 0 {
+				push_span(&current, " ", span.style, allocator)
+				used += 1
+			}
+			if piece_width > width && !span.atomic {
+				// Longer than a line on its own: break it a rune at a time.
+				start := 0
+				run := 0
+				for r, index in piece {
+					rune_width := text_width(utf8.runes_to_string({r}, context.temp_allocator))
+					if used + rune_width > width && used > 0 {
+						push_span(&current, piece[start:index], span.style, allocator)
+						flush(&lines, &current, &used, allocator)
+						start = index
+						run = 0
+					}
+					used += rune_width
+					run += rune_width
+				}
+				if start < len(piece) do push_span(&current, piece[start:], span.style, allocator)
+				continue
+			}
+			push_span(&current, piece, span.style, allocator)
+			used += piece_width
+		}
+	}
+	append(&lines, current)
+	return lines
+}
+
+spans_destroy :: proc(lines: ^[dynamic][dynamic]Span) {
+	for &line in lines {
+		for span in line do delete(span.text)
+		delete(line)
+	}
+	delete(lines^)
+	lines^ = nil
+}

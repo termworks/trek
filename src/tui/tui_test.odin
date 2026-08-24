@@ -350,3 +350,46 @@ test_wrap_name_hard_breaks_when_it_must :: proc(t: ^testing.T) {
 	defer delete(joined)
 	testing.expect_value(t, joined, "aaaaaaaaaaaaaaaaaaaaaaaa")
 }
+
+// Wrapping a styled paragraph has to keep the styling: a plain string wrap can only
+// paint a whole line one colour, which is what made refs invisible in the graph.
+@(test)
+test_wrap_spans_keeps_styles :: proc(t: ^testing.T) {
+	accent := Style{fg = ACCENT}
+	spans := []Span{
+		{text = "hash", style = Style{fg = RAMP_TEXT}},
+		{text = "some subject words here", style = accent},
+	}
+	lines := wrap_spans(spans[:], 14)
+	defer spans_destroy(&lines)
+	testing.expect(t, len(lines) > 1)
+	testing.expect_value(t, lines[0][0].style.fg, RAMP_TEXT)
+	// The subject keeps its own colour after the break.
+	last := lines[len(lines) - 1]
+	testing.expect_value(t, last[len(last) - 1].style.fg, ACCENT)
+	for line in lines {
+		width := 0
+		for span in line do width += text_width(span.text)
+		testing.expectf(t, width <= 14, "overflowed: %d", width)
+	}
+}
+
+// A ref chip is one object. Half a chip at a line end reads as damage, so an atomic
+// span moves to the next line whole even when that leaves the current one short.
+@(test)
+test_wrap_spans_never_splits_atomic :: proc(t: ^testing.T) {
+	spans := []Span{
+		{text = "aaaa", style = PLAIN_STYLE},
+		{text = " HEAD -> develop ", style = PLAIN_STYLE, atomic = true},
+	}
+	lines := wrap_spans(spans[:], 20)
+	defer spans_destroy(&lines)
+	// The chip is present exactly once, unbroken.
+	found := 0
+	for line in lines {
+		for span in line {
+			if span.text == " HEAD -> develop " do found += 1
+		}
+	}
+	testing.expect_value(t, found, 1)
+}

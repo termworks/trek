@@ -152,27 +152,63 @@ GRAPH_AGE :: tui.RAMP_FAINT
 GRAPH_AUTHOR :: tui.RAMP_MUTED
 GRAPH_SUBJECT :: tui.RAMP_BRIGHT
 
-// Ref colouring follows git's `%C(auto)`: HEAD cyan, remotes red, tags yellow,
-// local branches green.
-graph_ref_style :: proc(ref: string) -> tui.Style {
-	if strings.has_prefix(ref, "HEAD") do return tui.Style{fg = tui.indexed_color(6), attrs = {.Bold}}
-	if strings.has_prefix(ref, "tag: ") do return tui.Style{fg = tui.indexed_color(3), attrs = {.Bold}}
-	if strings.contains(ref, "/") do return tui.Style{fg = tui.indexed_color(1), attrs = {.Bold}}
-	return tui.Style{fg = tui.indexed_color(2), attrs = {.Bold}}
+// git's `%C(auto)` ref colours, as a chip: the branch name sits on the colour rather
+// than being drawn in it. A ref is the thing you scan a graph for, and coloured text
+// among more coloured text is exactly what does not stand out.
+graph_ref_colour :: proc(ref: string) -> tui.Color {
+	if strings.has_prefix(ref, "HEAD") do return tui.indexed_color(6)
+	if strings.has_prefix(ref, "tag: ") do return tui.indexed_color(3)
+	if strings.contains(ref, "/") do return tui.indexed_color(1)
+	return tui.indexed_color(2)
 }
 
-// One commit, laid out the way `git tree` lays it out. `%w(80,0,0)` reflows the
-// whole entry as a single paragraph, so hash, date, age, author, refs and subject
-// run together and break wherever the width falls — which is why a ref can end a
-// line and its branch begin the next. The lane glyphs repeat down every wrapped
-// row, and a blank line closes the entry.
-graph_commit_node :: proc(state: ^Graph_Tab, row: ^gitcore.Graph_Row, width: int, allocator: runtime.Allocator) -> tui.Node {
+// Tags carry their marker; `HEAD -> main` keeps the arrow git prints.
+graph_ref_label :: proc(ref: string, allocator: runtime.Allocator) -> string {
+	label := ref
+	if strings.has_prefix(label, "tag: ") do label = fmt.aprintf(" %s", label[len("tag: "):], allocator = allocator)
+	else do label = strings.clone(label, allocator)
+	return label
+}
+
+// The entry as styled runs, in git tree's field order. Everything but the refs flows
+// as ordinary words; each ref is one unbreakable chip.
+graph_entry_spans :: proc(state: ^Graph_Tab, row: ^gitcore.Graph_Row, allocator: runtime.Allocator) -> [dynamic]tui.Span {
 	commit := &state.history.commits[row.commit_index]
-	segments := graph_entry_text(state, row, context.temp_allocator)
+	spans := make([dynamic]tui.Span, allocator)
+	append(&spans, tui.Span{text = commit.hash[:min(7, len(commit.hash))], style = tui.Style{fg = GRAPH_HASH, attrs = {.Bold}}})
+	if commit.date != "" {
+		append(&spans, tui.Span{text = commit.date, style = tui.Style{fg = GRAPH_DATE}})
+	}
+	relative := graph_relative_time(commit.timestamp, allocator)
+	append(&spans, tui.Span{
+		text = fmt.aprintf("(%s)", relative, allocator = allocator),
+		style = tui.Style{fg = GRAPH_AGE},
+	})
+	append(&spans, tui.Span{text = commit.author, style = tui.Style{fg = GRAPH_AUTHOR}})
+	for ref in commit.refs {
+		colour := graph_ref_colour(ref)
+		label := graph_ref_label(ref, allocator)
+		append(&spans, tui.Span{
+			text = fmt.aprintf(" %s ", label, allocator = allocator),
+			style = tui.Style{fg = tui.BG, bg = colour, attrs = {.Bold}},
+			atomic = true,
+		})
+	}
+	append(&spans, tui.Span{text = commit.subject, style = tui.Style{fg = GRAPH_SUBJECT, attrs = {.Bold}}})
+	return spans
+}
 
+graph_wrapped :: proc(state: ^Graph_Tab, row: ^gitcore.Graph_Row, width: int) -> [dynamic][dynamic]tui.Span {
+	spans := graph_entry_spans(state, row, context.temp_allocator)
 	lane_width := len(row.cells) * 2 + 1
-	wrapped := tui.wrap_words(segments, max(width - lane_width - 1, 8), context.temp_allocator)
+	return tui.wrap_spans(spans[:], max(width - lane_width - 1, 8), context.temp_allocator)
+}
 
+// One commit, laid out the way `git tree` lays it out: the whole entry reflows as a
+// single paragraph, so a ref can end a line and the subject begin the next, with the
+// lane glyphs repeating down every wrapped row and a blank line closing the entry.
+graph_commit_node :: proc(state: ^Graph_Tab, row: ^gitcore.Graph_Row, width: int, allocator: runtime.Allocator) -> tui.Node {
+	wrapped := graph_wrapped(state, row, width)
 	rows := make([dynamic]tui.Node, allocator)
 	defer delete(rows)
 	for line, index in wrapped {
@@ -184,7 +220,9 @@ graph_commit_node :: proc(state: ^Graph_Tab, row: ^gitcore.Graph_Row, width: int
 		} else {
 			graph_continuation_nodes(&children, row.cells[:], row.lane)
 		}
-		append(&children, tui.owned_text(strings.clone(line, allocator), graph_entry_style(index)))
+		for span in line {
+			append(&children, tui.owned_text(strings.clone(span.text, allocator), span.style))
+		}
 		append(&children, tui.spacer())
 		append(&rows, tui.row(children[:], allocator))
 	}
@@ -197,41 +235,9 @@ graph_commit_node :: proc(state: ^Graph_Tab, row: ^gitcore.Graph_Row, width: int
 	return tui.column(rows[:], allocator)
 }
 
-// The first wrapped line carries the identity; the rest are the message flowing on.
-graph_entry_style :: proc(index: int) -> tui.Style {
-	if index == 0 do return tui.Style{fg = GRAPH_DATE}
-	return tui.Style{fg = GRAPH_SUBJECT, attrs = {.Bold}}
-}
-
-// The whole entry as one flowable string, in git tree's field order.
-graph_entry_text :: proc(state: ^Graph_Tab, row: ^gitcore.Graph_Row, allocator: runtime.Allocator) -> string {
-	commit := &state.history.commits[row.commit_index]
-	short_hash := commit.hash[:min(7, len(commit.hash))]
-	relative := graph_relative_time(commit.timestamp, context.temp_allocator)
-	builder := strings.builder_make(context.temp_allocator)
-	strings.write_string(&builder, short_hash)
-	if commit.date != "" {
-		strings.write_string(&builder, " ")
-		strings.write_string(&builder, commit.date)
-	}
-	strings.write_string(&builder, " (")
-	strings.write_string(&builder, relative)
-	strings.write_string(&builder, ") ")
-	strings.write_string(&builder, commit.author)
-	for ref in commit.refs {
-		strings.write_string(&builder, " ")
-		strings.write_string(&builder, ref)
-	}
-	strings.write_string(&builder, " ")
-	strings.write_string(&builder, commit.subject)
-	return strings.clone(strings.to_string(builder), allocator)
-}
-
 // How many terminal rows this entry needs, so the Row height matches what is drawn.
 graph_commit_height :: proc(state: ^Graph_Tab, row: ^gitcore.Graph_Row, width: int) -> int {
-	segments := graph_entry_text(state, row, context.temp_allocator)
-	lane_width := len(row.cells) * 2 + 1
-	wrapped := tui.wrap_words(segments, max(width - lane_width - 1, 8), context.temp_allocator)
+	wrapped := graph_wrapped(state, row, width)
 	return len(wrapped) + 1
 }
 
