@@ -1,9 +1,11 @@
 package git
 
+import "base:runtime"
 import "core:os"
 import "core:path/filepath"
 import "core:strings"
 import "core:testing"
+import "core:unicode/utf8"
 import "core:time"
 
 git_test_dir :: proc(t: ^testing.T) -> string {
@@ -145,74 +147,183 @@ graph_test_history :: proc(specs: []Commit_Spec) -> History {
 	return history
 }
 
-graph_commit_rows :: proc(graph: ^Graph) -> int {
-	count := 0
-	for row in graph.rows {
-		if !row.connector do count += 1
+// The graph is git's algorithm, so the test for it is git's own output. Each fixture
+// below was captured from `git log --graph` on a real repository with that exact
+// topology; the engine has to redraw it character for character. A picture that merely
+// looks plausible is the failure this catches.
+graph_render :: proc(graph: ^Graph, allocator := context.allocator) -> [dynamic]string {
+	lines := make([dynamic]string, allocator)
+	emit :: proc(lines: ^[dynamic]string, line: Graph_Line, allocator: runtime.Allocator) {
+		text := make([dynamic]rune, allocator)
+		defer delete(text)
+		for cell in line do append(&text, cell.glyph)
+		append(lines, utf8.runes_to_string(text[:], allocator))
 	}
-	return count
+	for &entry in graph.entries {
+		for line in entry.pre do emit(&lines, line, allocator)
+		emit(&lines, entry.line, allocator)
+		for line in entry.rest do emit(&lines, line, allocator)
+	}
+	return lines
 }
 
-@(test)
-test_graph_assigns_linear_history :: proc(t: ^testing.T) {
-	history := graph_test_history([]Commit_Spec{{"a", "b"}, {"b", "c"}, {"c", ""}})
-	defer history_destroy(&history)
-	graph := assign_lanes(&history)
+expect_graph :: proc(t: ^testing.T, history: ^History, expected: []string, loc := #caller_location) {
+	graph := build_graph(history)
 	defer graph_destroy(&graph)
-	testing.expect_value(t, graph_commit_rows(&graph), 3)
-	testing.expect_value(t, graph.max_lanes, 1)
-	testing.expect_value(t, graph.rows[0].cells[0], '●')
+	drawn := graph_render(&graph)
+	defer { for line in drawn do delete(line); delete(drawn) }
+	testing.expectf(t, len(drawn) == len(expected), "drew %d rows, git drew %d", len(drawn), len(expected), loc = loc)
+	for line, index in drawn {
+		if index >= len(expected) do break
+		testing.expectf(t, line == expected[index], "row %d: drew %q, git drew %q", index, line, expected[index], loc = loc)
+	}
 }
 
 @(test)
-test_graph_assigns_merge_and_octopus_lanes :: proc(t: ^testing.T) {
-	merge := graph_test_history([]Commit_Spec{{"m", "a b"}, {"a", "c"}, {"b", "c"}, {"c", ""}})
-	defer history_destroy(&merge)
-	merge_graph := assign_lanes(&merge)
-	defer graph_destroy(&merge_graph)
-	testing.expect(t, merge_graph.max_lanes >= 2)
-	octopus := graph_test_history([]Commit_Spec{{"m", "a b c d"}, {"a", ""}, {"b", ""}, {"c", ""}, {"d", ""}})
-	defer history_destroy(&octopus)
-	octopus_graph := assign_lanes(&octopus)
-	defer graph_destroy(&octopus_graph)
-	testing.expect_value(t, octopus_graph.max_lanes, 4)
-	testing.expect_value(t, graph_commit_rows(&octopus_graph), 5)
-}
-
-@(test)
-test_graph_assigns_criss_cross_history :: proc(t: ^testing.T) {
+test_graph_matches_git_linear :: proc(t: ^testing.T) {
 	history := graph_test_history([]Commit_Spec{
-		{"m", "a b"}, {"a", "c d"}, {"b", "d c"},
-		{"c", "e"}, {"d", "e"}, {"e", ""},
+		{"d", "b"},
+		{"b", "a"},
+		{"a", ""},
 	})
 	defer history_destroy(&history)
-	graph := assign_lanes(&history)
-	defer graph_destroy(&graph)
-	testing.expect_value(t, graph_commit_rows(&graph), 6)
-	testing.expect(t, graph.max_lanes >= 2)
-	connectors := 0
-	for row in graph.rows {
-		if row.connector do connectors += 1
+	// Captured from `git log --graph` on this exact topology (git 2.53.0).
+	expected := []string{
+		"* ",
+		"* ",
+		"* ",
 	}
-	testing.expect(t, connectors >= 2)
+
+	expect_graph(t, &history, expected)
 }
 
+
 @(test)
-test_graph_collapses_lane_overflow :: proc(t: ^testing.T) {
+test_graph_matches_git_merge :: proc(t: ^testing.T) {
 	history := graph_test_history([]Commit_Spec{
-		{"m", "a b c d e f"}, {"a", ""}, {"b", ""}, {"c", ""},
-		{"d", ""}, {"e", ""}, {"f", ""},
+		{"e", "M1"},
+		{"M1", "d f2"},
+		{"f2", "f1"},
+		{"f1", "b"},
+		{"d", "b"},
+		{"b", "a"},
+		{"a", ""},
 	})
 	defer history_destroy(&history)
-	graph := assign_lanes(&history, 3)
-	defer graph_destroy(&graph)
-	overflow := false
-	for row in graph.rows {
-		if row.overflow do overflow = true
+	// Captured from `git log --graph` on this exact topology (git 2.53.0).
+	expected := []string{
+		"* ",
+		"*   ",
+		"|\\  ",
+		"| * ",
+		"| * ",
+		"* | ",
+		"|/  ",
+		"* ",
+		"* ",
 	}
-	testing.expect(t, overflow)
-	testing.expect(t, graph.max_lanes <= 3)
+
+	expect_graph(t, &history, expected)
 }
+
+
+@(test)
+test_graph_matches_git_octopus :: proc(t: ^testing.T) {
+	history := graph_test_history([]Commit_Spec{
+		{"g", "OCT"},
+		{"OCT", "f b d e"},
+		{"e", "a"},
+		{"d", "a"},
+		{"b", "a"},
+		{"f", "a"},
+		{"a", ""},
+	})
+	defer history_destroy(&history)
+	// Captured from `git log --graph` on this exact topology (git 2.53.0).
+	expected := []string{
+		"* ",
+		"*---.   ",
+		"|\\ \\ \\  ",
+		"| | | * ",
+		"| | * | ",
+		"| | |/  ",
+		"| * / ",
+		"| |/  ",
+		"* / ",
+		"|/  ",
+		"* ",
+	}
+
+	expect_graph(t, &history, expected)
+}
+
+
+@(test)
+test_graph_matches_git_crossing :: proc(t: ^testing.T) {
+	history := graph_test_history([]Commit_Spec{
+		{"z", "MY"},
+		{"MY", "MX y1"},
+		{"y1", "m1"},
+		{"MX", "m1 x1"},
+		{"x1", "a"},
+		{"m1", "a"},
+		{"a", ""},
+	})
+	defer history_destroy(&history)
+	// Captured from `git log --graph` on this exact topology (git 2.53.0).
+	expected := []string{
+		"* ",
+		"*   ",
+		"|\\  ",
+		"| * ",
+		"* |   ",
+		"|\\ \\  ",
+		"| |/  ",
+		"|/|   ",
+		"| * ",
+		"* | ",
+		"|/  ",
+		"* ",
+	}
+
+	expect_graph(t, &history, expected)
+}
+
+
+@(test)
+test_graph_matches_git_wide :: proc(t: ^testing.T) {
+	history := graph_test_history([]Commit_Spec{
+		{"MR", "MQ r1"},
+		{"r1", "a"},
+		{"MQ", "MP q1"},
+		{"q1", "a"},
+		{"MP", "m p1"},
+		{"p1", "a"},
+		{"m", "a"},
+		{"a", ""},
+	})
+	defer history_destroy(&history)
+	// Captured from `git log --graph` on this exact topology (git 2.53.0).
+	expected := []string{
+		"*   ",
+		"|\\  ",
+		"| * ",
+		"* |   ",
+		"|\\ \\  ",
+		"| * | ",
+		"| |/  ",
+		"* |   ",
+		"|\\ \\  ",
+		"| * | ",
+		"| |/  ",
+		"* / ",
+		"|/  ",
+		"* ",
+	}
+
+	expect_graph(t, &history, expected)
+}
+
 
 @(test)
 test_graph_log_parser_reads_refs :: proc(t: ^testing.T) {

@@ -17,7 +17,8 @@ fake_rows :: proc(data: rawptr, width: int, allocator: runtime.Allocator) -> [dy
 		id := fmt.aprintf("row-%d", index, allocator = allocator)
 		append(&rows, tabpkg.Row{
 			id = id,
-			path = id,
+			// Never alias id: rows_destroy frees both, and a shared pointer is a double free.
+			path = strings.clone(id, allocator),
 			selectable = true,
 			height = 1,
 			node = tui.text(id),

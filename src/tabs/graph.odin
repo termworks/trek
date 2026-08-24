@@ -47,7 +47,7 @@ graph_refresh :: proc(state: ^Graph_Tab) {
 		return
 	}
 	state.history = history
-	state.graph = gitcore.assign_lanes(&state.history, allocator = state.allocator)
+	state.graph = gitcore.build_graph(&state.history, allocator = state.allocator)
 }
 
 graph_new :: proc(root: string, allocator := context.allocator) -> ^Graph_Tab {
@@ -57,50 +57,37 @@ graph_new :: proc(root: string, allocator := context.allocator) -> ^Graph_Tab {
 	graph_refresh(state)
 	return state
 }
-
-graph_lane_style :: proc(lane: int) -> tui.Style {
-	// Lane colours cycle through the ANSI 16 so a themed palette drives them, the same
-	// way every other colour in trek is an index rather than a baked hex.
-	styles := [?]tui.Style{
-		{fg = tui.indexed_color(2), bg = tui.DEFAULT_COLOR},
-		{fg = tui.indexed_color(4), bg = tui.DEFAULT_COLOR},
-		{fg = tui.indexed_color(3), bg = tui.DEFAULT_COLOR},
-		{fg = tui.indexed_color(5), bg = tui.DEFAULT_COLOR},
-		{fg = tui.indexed_color(6), bg = tui.DEFAULT_COLOR},
-		{fg = tui.indexed_color(1), bg = tui.DEFAULT_COLOR},
-	}
-	return styles[lane % len(styles)]
+// git colours a lane by index into its own cycle; NO_COLOR is the padding it leaves
+// plain. Resolving through the ANSI 16 keeps a themed palette in charge.
+graph_cell_style :: proc(color: int) -> tui.Style {
+	if color < 0 || color >= gitcore.GRAPH_COLORS do return tui.PLAIN_STYLE
+	return tui.Style{fg = tui.indexed_color(gitcore.GRAPH_LANE_COLORS[color])}
 }
 
-graph_cell_text :: proc(cell: rune) -> string {
+// git draws in ASCII. The structure is its, one cell per cell; only the glyphs are
+// trek's, so nothing shifts position.
+graph_glyph :: proc(cell: rune) -> string {
 	switch cell {
-	case '●': return "●"
-	case '│': return "│"
-	case '├': return "├"
-	case '╯': return "╯"
-	case '╰': return "╰"
-	case '┐': return "┐"
-	case '┌': return "┌"
-	case '┤': return "┤"
-	case '─': return "─"
-	case '…': return "…"
+	case '*': return "●"
+	case '|': return "│"
+	case '/': return "╱"
+	case '\\': return "╲"
+	case '_', '-': return "─"
+	case '.': return "╮"
 	}
 	return " "
 }
 
-graph_lane_nodes :: proc(children: ^[dynamic]tui.Node, cells: []rune) {
-	for cell, lane in cells {
-		append(children, tui.priority(tui.text(graph_cell_text(cell), graph_lane_style(lane)), 100))
-		append(children, tui.priority(tui.text(" "), 100))
+graph_line_nodes :: proc(children: ^[dynamic]tui.Node, line: gitcore.Graph_Line) {
+	for cell in line {
+		append(children, tui.priority(tui.text(graph_glyph(cell.glyph), graph_cell_style(cell.color)), 100))
 	}
 }
 
 graph_ref_node :: proc(ref: string, lane: int, allocator: runtime.Allocator) -> tui.Node {
 	label := ref
 	if strings.has_prefix(label, "HEAD -> ") do label = label[len("HEAD -> "):]
-	color := graph_lane_style(lane).fg
-	if strings.has_prefix(label, "tag: ") do color = tui.STATUS_MODIFIED
-	if strings.contains(label, "origin/") do color = tui.indexed_color(4)
+	color := graph_ref_colour(ref)
 	return tui.styled(tui.row([]tui.Node{
 		tui.text(" "),
 		tui.text(label),
@@ -141,10 +128,6 @@ graph_relative_time :: proc(timestamp: i64, allocator: runtime.Allocator) -> str
 	return unit((diff + 183) / 365, "year", allocator)
 }
 
-graph_owned_text :: proc(value: string, style := tui.PLAIN_STYLE) -> tui.Node {
-	return tui.owned_text(value, style)
-}
-
 // `git tree`'s colours, as palette indices so a theme still drives them.
 GRAPH_HASH :: tui.Color{kind = .Indexed, index = 5}
 GRAPH_DATE :: tui.RAMP_TEXT
@@ -165,15 +148,15 @@ graph_ref_colour :: proc(ref: string) -> tui.Color {
 // Tags carry their marker; `HEAD -> main` keeps the arrow git prints.
 graph_ref_label :: proc(ref: string, allocator: runtime.Allocator) -> string {
 	label := ref
-	if strings.has_prefix(label, "tag: ") do label = fmt.aprintf(" %s", label[len("tag: "):], allocator = allocator)
+	if strings.has_prefix(label, "tag: ") do label = fmt.aprintf(" %s", label[len("tag: "):], allocator = allocator)
 	else do label = strings.clone(label, allocator)
 	return label
 }
 
 // The entry as styled runs, in git tree's field order. Everything but the refs flows
 // as ordinary words; each ref is one unbreakable chip.
-graph_entry_spans :: proc(state: ^Graph_Tab, row: ^gitcore.Graph_Row, allocator: runtime.Allocator) -> [dynamic]tui.Span {
-	commit := &state.history.commits[row.commit_index]
+graph_entry_spans :: proc(state: ^Graph_Tab, commit_index: int, allocator: runtime.Allocator) -> [dynamic]tui.Span {
+	commit := &state.history.commits[commit_index]
 	spans := make([dynamic]tui.Span, allocator)
 	append(&spans, tui.Span{text = commit.hash[:min(7, len(commit.hash))], style = tui.Style{fg = GRAPH_HASH, attrs = {.Bold}}})
 	if commit.date != "" {
@@ -198,66 +181,57 @@ graph_entry_spans :: proc(state: ^Graph_Tab, row: ^gitcore.Graph_Row, allocator:
 	return spans
 }
 
-graph_wrapped :: proc(state: ^Graph_Tab, row: ^gitcore.Graph_Row, width: int) -> [dynamic][dynamic]tui.Span {
-	spans := graph_entry_spans(state, row, context.temp_allocator)
-	lane_width := len(row.cells) * 2 + 1
-	return tui.wrap_spans(spans[:], max(width - lane_width - 1, 8), context.temp_allocator)
+graph_wrapped :: proc(state: ^Graph_Tab, entry: ^gitcore.Graph_Entry, width: int) -> [dynamic][dynamic]tui.Span {
+	spans := graph_entry_spans(state, entry.commit_index, context.temp_allocator)
+	lane_width := len(entry.line)
+	return tui.wrap_spans(spans[:], max(width - lane_width - 2, 8), context.temp_allocator)
 }
 
-// One commit, laid out the way `git tree` lays it out: the whole entry reflows as a
-// single paragraph, so a ref can end a line and the subject begin the next, with the
-// lane glyphs repeating down every wrapped row and a blank line closing the entry.
-graph_commit_node :: proc(state: ^Graph_Tab, row: ^gitcore.Graph_Row, width: int, allocator: runtime.Allocator) -> tui.Node {
-	wrapped := graph_wrapped(state, row, width)
+// The graph row a given text line is drawn against. git prints the commit's remaining
+// rows beside the message's later lines, then keeps printing the padding row once the
+// graph has nothing left to say.
+graph_row_for :: proc(entry: ^gitcore.Graph_Entry, index: int) -> gitcore.Graph_Line {
+	if index == 0 do return entry.line
+	if index - 1 < len(entry.rest) do return entry.rest[index - 1]
+	return entry.pad
+}
+
+graph_text_row :: proc(line: gitcore.Graph_Line, spans: []tui.Span, allocator: runtime.Allocator) -> tui.Node {
+	children := make([dynamic]tui.Node, allocator)
+	defer delete(children)
+	append(&children, tui.priority(tui.transparent(1), 100, allocator))
+	graph_line_nodes(&children, line)
+	append(&children, tui.priority(tui.text(" "), 100))
+	for span in spans {
+		append(&children, tui.owned_text(strings.clone(span.text, allocator), span.style))
+	}
+	append(&children, tui.spacer())
+	return tui.row(children[:], allocator)
+}
+
+// One commit, laid out the way git lays it out: expansion rows above, the commit row
+// carrying the first line of text, the merge and collapse rows carrying the rest, and
+// a padding row closing the entry.
+graph_commit_node :: proc(state: ^Graph_Tab, entry: ^gitcore.Graph_Entry, width: int, allocator: runtime.Allocator) -> tui.Node {
+	wrapped := graph_wrapped(state, entry, width)
 	rows := make([dynamic]tui.Node, allocator)
 	defer delete(rows)
-	for line, index in wrapped {
-		children := make([dynamic]tui.Node, allocator)
-		defer delete(children)
-		append(&children, tui.priority(tui.transparent(1), 100, allocator))
-		if index == 0 {
-			graph_lane_nodes(&children, row.cells[:])
-		} else {
-			graph_continuation_nodes(&children, row.cells[:], row.lane)
-		}
-		for span in line {
-			append(&children, tui.owned_text(strings.clone(span.text, allocator), span.style))
-		}
-		append(&children, tui.spacer())
-		append(&rows, tui.row(children[:], allocator))
+	for line in entry.pre do append(&rows, graph_text_row(line, {}, allocator))
+	for text, index in wrapped {
+		append(&rows, graph_text_row(graph_row_for(entry, index), text[:], allocator))
 	}
-	gap := make([dynamic]tui.Node, allocator)
-	defer delete(gap)
-	append(&gap, tui.priority(tui.transparent(1), 100, allocator))
-	graph_continuation_nodes(&gap, row.cells[:], row.lane)
-	append(&gap, tui.spacer())
-	append(&rows, tui.row(gap[:], allocator))
+	// Any graph rows the text did not reach still have to be drawn, or the lanes jump.
+	for index := max(len(wrapped) - 1, 0); index < len(entry.rest); index += 1 {
+		append(&rows, graph_text_row(entry.rest[index], {}, allocator))
+	}
+	append(&rows, graph_text_row(entry.pad, {}, allocator))
 	return tui.column(rows[:], allocator)
 }
 
-// How many terminal rows this entry needs, so the Row height matches what is drawn.
-graph_commit_height :: proc(state: ^Graph_Tab, row: ^gitcore.Graph_Row, width: int) -> int {
-	wrapped := graph_wrapped(state, row, width)
-	return len(wrapped) + 1
-}
-
-// The lane row drawn under a commit: the commit's own marker becomes a vertical,
-// everything else stays as it was.
-graph_continuation_nodes :: proc(children: ^[dynamic]tui.Node, cells: []rune, lane: int) {
-	for cell, index in cells {
-		glyph := cell
-		if index == lane && cell == '●' do glyph = '│'
-		append(children, tui.priority(tui.text(graph_cell_text(glyph), graph_lane_style(index)), 100))
-		append(children, tui.priority(tui.text(" "), 100))
-	}
-}
-
-graph_connector_node :: proc(row: ^gitcore.Graph_Row, allocator: runtime.Allocator) -> tui.Node {
-	children := make([dynamic]tui.Node, allocator)
-	defer delete(children)
-	append(&children, tui.priority(tui.transparent(1), 100))
-	graph_lane_nodes(&children, row.cells[:])
-	return tui.row(children[:], allocator)
+graph_commit_height :: proc(state: ^Graph_Tab, entry: ^gitcore.Graph_Entry, width: int) -> int {
+	wrapped := graph_wrapped(state, entry, width)
+	consumed := min(len(entry.rest), max(len(wrapped) - 1, 0))
+	return len(entry.pre) + len(wrapped) + (len(entry.rest) - consumed) + 1
 }
 
 graph_rows_proc :: proc(data: rawptr, width: int, allocator: runtime.Allocator) -> [dynamic]Row {
@@ -273,27 +247,17 @@ graph_rows_proc :: proc(data: rawptr, width: int, allocator: runtime.Allocator) 
 		append(&rows, Row{id = id, path = strings.clone(id, allocator), height = 1, node = tui.text(" No commits")})
 		return rows
 	}
-	for &graph_row, index in state.graph.rows {
-		if graph_row.connector {
-			id := fmt.aprintf("connector:%d", index, allocator = allocator)
-			append(&rows, Row{
-				id = id,
-				path = strings.clone(id, allocator),
-				height = 1,
-				node = graph_connector_node(&graph_row, allocator),
-			})
-			continue
-		}
-		commit := &state.history.commits[graph_row.commit_index]
+	for &entry in state.graph.entries {
+		commit := &state.history.commits[entry.commit_index]
 		id := strings.clone(commit.hash, allocator)
 		append(&rows, Row{
 			id = id,
 			path = strings.clone(id, allocator),
 			selectable = true,
-			height = graph_commit_height(state, &graph_row, width),
+			height = graph_commit_height(state, &entry, width),
 			kind = .Graph_Commit,
-			entry_index = graph_row.commit_index,
-			node = graph_commit_node(state, &graph_row, width, allocator),
+			entry_index = entry.commit_index,
+			node = graph_commit_node(state, &entry, width, allocator),
 		})
 	}
 	return rows
