@@ -1,6 +1,7 @@
 package live
 
 import "core:strings"
+import "core:os"
 import "core:testing"
 
 // The reply shape is the one thing a family cannot disagree about quietly. A tool answering
@@ -180,4 +181,33 @@ test_notice_primes_before_it_fires :: proc(t: ^testing.T) {
 	testing.expect_value(t, watch.root, "/two")
 	// The selection did not move, so it is left exactly as it was.
 	testing.expect_value(t, watch.selection, "/one/a")
+}
+
+// **A path is not safe to paste into JSON.** A quote or a backslash in a directory name is legal on
+// Linux and would end the string early — handing the shell a frame it cannot parse, or one it parses
+// as something other than what was meant.
+@(test)
+oslo_request_escapes_what_a_path_may_contain :: proc(t: ^testing.T) {
+	plain := oslo_cd_request("/tmp/project", context.temp_allocator)
+	testing.expect_value(t, plain, `{"call":"cd","args":["/tmp/project"]}`)
+
+	quoted := oslo_cd_request(`/tmp/od"d`, context.temp_allocator)
+	testing.expect_value(t, quoted, `{"call":"cd","args":["/tmp/od\"d"]}`)
+
+	slashed := oslo_cd_request(`/tmp/back\slash`, context.temp_allocator)
+	testing.expect_value(t, slashed, `{"call":"cd","args":["/tmp/back\\slash"]}`)
+
+	// The rest of the control range, which JSON requires spelled out rather than sent raw.
+	controlled := oslo_cd_request("/tmp/a\x01b", context.temp_allocator)
+	testing.expect_value(t, controlled, `{"call":"cd","args":["/tmp/a\u0001b"]}`)
+}
+
+// Nothing is sent outside a shell that asked for it: no `$OSLO_SOCK`, no socket, no request.
+@(test)
+nothing_is_sent_without_a_shell_to_send_it_to :: proc(t: ^testing.T) {
+	previous, had := os.lookup_env("OSLO_SOCK", context.temp_allocator)
+	os.unset_env("OSLO_SOCK")
+	testing.expect(t, oslo_socket(context.temp_allocator) == "")
+	testing.expect(t, !oslo_cd("/tmp"), "no socket named, nothing written")
+	if had do os.set_env("OSLO_SOCK", previous)
 }

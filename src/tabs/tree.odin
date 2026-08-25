@@ -6,6 +6,7 @@ import "core:os"
 import "core:path/filepath"
 import "core:strings"
 import gitcore "../git"
+import live "../live"
 import model "../model"
 import tui "../tui"
 Tree_Tab :: struct {
@@ -169,6 +170,12 @@ tree_reroot :: proc(state: ^Tree_Tab, path: string, selected: string) -> Tab_Res
 	model.tree_init(&state.tree, root, allocator)
 	state.tree.flat = flat
 	state.tree.show_hidden = hidden
+
+	// **Where the shell follows along.** Only in explorer mode: that is where walking in and out is
+	// the interaction, and where the shell being left behind is felt. In tree mode the root does not
+	// move for a fold, so there is nothing to tell anyone. Silent and non-blocking — see
+	// `live.oslo_cd` for why a browser must not stop to talk to a shell.
+	if state.tree.flat do live.oslo_cd(state.tree.root)
 
 	remembered := ""
 	if value, found := state.history[state.tree.root]; found do remembered = value
