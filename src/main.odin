@@ -18,6 +18,8 @@ VERSION :: "0.1.3"
 Options :: struct {
 	root:      string,
 	cwd_file:  string,
+	// A file given as the path: the row to land on once its directory is open.
+	reveal:    string,
 	explore:   bool,
 	serve:     bool,
 	width:     int,
@@ -93,7 +95,9 @@ usage :: proc() {
 	fmt.println("trek")
 	fmt.println("")
 	fmt.println("Usage:")
-	fmt.println("  trek [path] [options]")
+	fmt.println("  trek [path or file] [options]")
+	fmt.println("")
+	fmt.println("  A directory opens there. A file opens its directory with that file selected.")
 	fmt.println("")
 	fmt.println("Options:")
 	fmt.println("  -e, --explore        start in explorer mode (walk into directories)")
@@ -190,6 +194,11 @@ run_tui :: proc(root: string, options: Options) -> bool {
 	ui.shell_add_tab(&shell, tabs.graph_tab(root))
 	for &definition in config.tabs do ui.shell_add_tab(&shell, tabs.lua_tab(&config, &definition))
 	_ = ui.shell_switch_named(&shell, config.settings.start_tab)
+	// Launch with something under the cursor. Without this the first arrow key is spent
+	// selecting rather than moving, and in explorer mode -- where the selection IS what you
+	// act on -- there is nothing to act on until you press one. A file given as the path
+	// lands the cursor on it; anything else lands on the first row.
+	ui.shell_apply_selection(&shell, tabs.Tab_Result{select_id = options.reveal, select_first = true})
 	if config.plugin_error != "" do ui.shell_set_footer(&shell, config.plugin_error)
 	if message := luaconfig.engine_emit(&config, "root", root); message != "" {
 		ui.shell_set_footer(&shell, message)
@@ -325,19 +334,24 @@ main :: proc() {
 		fmt.eprintln("trek:", options.error)
 		os.exit(2)
 	}
-	root, path_err := filepath.abs(options.root, context.allocator)
+	target, path_err := filepath.abs(options.root, context.allocator)
 	if path_err != nil {
-		fmt.eprintln("trek: invalid root path")
+		fmt.eprintln("trek: invalid path")
 		os.exit(1)
 	}
-	defer delete(root)
-	info, stat_err := os.stat(root, context.allocator)
-	if stat_err != nil || info.type != .Directory {
-		if stat_err == nil do os.file_info_delete(info, context.allocator)
-		fmt.eprintln("trek: root is not a directory")
+	defer delete(target)
+	info, stat_err := os.stat(target, context.allocator)
+	if stat_err != nil {
+		fmt.eprintln("trek:", options.root, "does not exist")
 		os.exit(1)
 	}
+	is_directory := info.type == .Directory
 	os.file_info_delete(info, context.allocator)
+
+		root, reveal := launch_target(target, is_directory)
+	defer delete(root)
+	defer delete(reveal)
+	options.reveal = reveal
 	if !run_tui(root, options) do os.exit(1)
 }
 
@@ -360,4 +374,14 @@ live_snapshot :: proc(shell: ^ui.Shell) -> live.Snapshot {
 	}
 	snapshot.tabs = names[:]
 	return snapshot
+}
+
+// Where a path argument points: the directory to open, and the row to land on inside it.
+//
+// A file names both halves of the same request, which is why there is no second flag for
+// it: "open here" and "open here, on this" differ only by a detail, and an editor asking
+// for a sidebar has the file in hand, not the directory.
+launch_target :: proc(path: string, is_directory: bool, allocator := context.allocator) -> (root, reveal: string) {
+	if is_directory do return strings.clone(path, allocator), ""
+	return filepath.dir(path, allocator), strings.clone(path, allocator)
 }

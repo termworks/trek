@@ -39,7 +39,16 @@ make test --package lua --names lua.test_lua_exec_is_a_cached_poll --threads 1
 ## Usage
 
 ```sh
-trek [path] [options]
+trek [path or file] [options]
+```
+
+The argument says where to start **and**, optionally, what to start on. A directory
+opens there with the cursor on its first row; a **file** opens the directory around it
+with the cursor on that file. One argument rather than two, because an editor asking for
+a sidebar has the file in hand, not the directory:
+
+```sh
+trek src/main.odin        # opens src/, cursor on main.odin
 ```
 
 | option | |
