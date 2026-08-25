@@ -17,7 +17,8 @@ fake_rows :: proc(data: rawptr, width: int, allocator: runtime.Allocator) -> [dy
 		id := fmt.aprintf("row-%d", index, allocator = allocator)
 		append(&rows, tabpkg.Row{
 			id = id,
-			path = id,
+			// Never alias id: rows_destroy frees both, and a shared pointer is a double free.
+			path = strings.clone(id, allocator),
 			selectable = true,
 			height = 1,
 			node = tui.text(id),
@@ -316,4 +317,44 @@ test_help_lists_shortcuts_for_the_active_tab :: proc(t: ^testing.T) {
 	// And it closes on the key that opened it.
 	shell_key(&shell, tui.Key{code = .Rune, rune = '?'}, 12)
 	testing.expect_value(t, shell.overlay.kind, Overlay_Kind.None)
+}
+
+// A `when` that has to ask a background process is necessarily wrong the first time:
+// the answer has not arrived. Visibility used to be settled only on root changes, so
+// such a tab stayed hidden until you navigated -- which, for a tab about the directory
+// you are already in, means it never appears at all.
+Revisit_Probe :: struct {
+	ready: bool,
+	asked: int,
+}
+
+probe_visible :: proc(data: rawptr) -> bool {
+	return (^Revisit_Probe)(data).ready
+}
+
+probe_revisit :: proc(data: rawptr) -> tabpkg.Tab_Result {
+	probe := (^Revisit_Probe)(data)
+	probe.asked += 1
+	probe.ready = true
+	return tabpkg.Tab_Result{rows_changed = true}
+}
+
+@(test)
+test_a_tab_that_answered_late_still_appears :: proc(t: ^testing.T) {
+	shell: Shell
+	shell_init(&shell)
+	defer shell_destroy(&shell)
+	shell_add_tab(&shell, fake_tab("tree"))
+
+	probe: Revisit_Probe
+	pending := fake_tab("tags")
+	pending.data = &probe
+	pending.visible = probe_visible
+	pending.revisit = probe_revisit
+	shell_add_tab(&shell, pending)
+
+	testing.expect_value(t, shell_visible_count(&shell), 1)
+	shell_revisit(&shell)
+	testing.expect_value(t, probe.asked, 1)
+	testing.expect_value(t, shell_visible_count(&shell), 2)
 }

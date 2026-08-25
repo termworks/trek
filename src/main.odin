@@ -10,19 +10,22 @@ import model "./model"
 import settings "./settings"
 import tabs "./tabs"
 import tui "./tui"
+import live "./live"
 import ui "./ui"
 
-VERSION :: "0.1.1"
+VERSION :: "0.1.2"
 
 Options :: struct {
 	root:      string,
 	cwd_file:  string,
 	explore:   bool,
+	serve:     bool,
 	width:     int,
 	height:    int,
 	align:     string,
 	help:      bool,
 	version:   bool,
+	printed:   bool,
 	error:     string,
 }
 
@@ -37,6 +40,12 @@ parse_options :: proc(args: []string, default_root: string) -> Options {
 		case "-h", "--help": options.help = true
 		case "-V", "--version": options.version = true
 		case "-e", "--explore": options.explore = true
+		case "--serve": options.serve = true
+		case "--lua-api":
+			// The client library on stdout, for a host that can shell out. One that
+			// cannot asks the running trek for it instead, through the `client` verb.
+			fmt.print(string(live.CLIENT_SOURCE))
+			options.printed = true
 		case "--width", "--height", "--align":
 			if index >= len(args) {
 				options.error = "option needs a value"
@@ -88,6 +97,8 @@ usage :: proc() {
 	fmt.println("")
 	fmt.println("Options:")
 	fmt.println("  -e, --explore        start in explorer mode (walk into directories)")
+	fmt.println("      --serve          bind a control socket other programs can query")
+	fmt.println("      --lua-api        print the client library, then exit")
 	fmt.println("      --cwd-file PATH  write the directory trek finished in to PATH")
 	fmt.println("      --width N        viewport columns (default: the terminal)")
 	fmt.println("      --height N       viewport rows (default: the terminal)")
@@ -179,6 +190,7 @@ run_tui :: proc(root: string, options: Options) -> bool {
 	ui.shell_add_tab(&shell, tabs.graph_tab(root))
 	for &definition in config.tabs do ui.shell_add_tab(&shell, tabs.lua_tab(&config, &definition))
 	_ = ui.shell_switch_named(&shell, config.settings.start_tab)
+	if config.plugin_error != "" do ui.shell_set_footer(&shell, config.plugin_error)
 	if message := luaconfig.engine_emit(&config, "root", root); message != "" {
 		ui.shell_set_footer(&shell, message)
 		delete(message)
@@ -198,10 +210,30 @@ run_tui :: proc(root: string, options: Options) -> bool {
 	defer tui.buffer_destroy(&content)
 	view := tui.Rect{width = buffer.width, height = buffer.height}
 
+	// Opt-in: a run nobody asks about has no socket at all, which is what makes the
+	// feature safe to leave available by default.
+	server: live.Server
+	if options.serve {
+		if path, ok := live.serve(&server); ok {
+			ui.shell_set_footer(&shell, path)
+		} else {
+			ui.shell_set_footer(&shell, "could not bind the control socket")
+		}
+	}
+	defer live.stop(&server)
+	watch: live.Watch
+	defer live.watch_destroy(&watch)
+
 	input: [4096]byte
 	for !shell.quit && !tui.terminal_should_exit() {
 		free_all(context.temp_allocator)
-		if luaconfig.engine_poll(&config) do ui.shell_reload(&shell)
+		if luaconfig.engine_poll(&config) {
+			ui.shell_revisit(&shell)
+			ui.shell_reload(&shell)
+		}
+		live_state := live_snapshot(&shell)
+		live.notice(&server, &watch, live_state)
+		live.poll(&server, live_state)
 		if tui.terminal_take_resize() {
 			if new_width, new_height, resized := tui.terminal_size(); resized {
 				tui.buffer_resize(&buffer, new_width, new_height)
@@ -284,6 +316,7 @@ main :: proc() {
 		usage()
 		return
 	}
+	if options.printed do return
 	if options.version {
 		fmt.println(VERSION)
 		return
@@ -306,4 +339,25 @@ main :: proc() {
 	}
 	os.file_info_delete(info, context.allocator)
 	if !run_tui(root, options) do os.exit(1)
+}
+
+// What the control socket may answer with. Built from the shell each poll rather than
+// reached for, so the live package never depends on the ui.
+live_snapshot :: proc(shell: ^ui.Shell) -> live.Snapshot {
+	snapshot := live.Snapshot{}
+	if tab := ui.shell_active_tab(shell); tab != nil do snapshot.tab = tab.name
+	if hidden, root, _, ok := tabs.tree_state(ui.shell_tree_tab(shell)); ok {
+		_ = hidden
+		snapshot.root = root
+	}
+	if row := ui.shell_selected_row(shell); row != nil {
+		snapshot.selection = row.path
+		snapshot.is_dir = row.is_dir
+	}
+	names := make([dynamic]string, context.temp_allocator)
+	for &tab in shell.tabs {
+		if tabs.tab_visible(&tab) do append(&names, tab.name)
+	}
+	snapshot.tabs = names[:]
+	return snapshot
 }

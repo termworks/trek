@@ -532,13 +532,11 @@ shell_viewport_height :: proc(shell: ^Shell, height: int) -> int {
 	return max(height - HEADER_HEIGHT - shell_footer_height(shell), 0)
 }
 
+// A tab carries its own icon. These used to be looked up by name here, which left the
+// icon fields beside the built-in tabs unread — and an unread field rots: the changes
+// tab's had become an empty string with nothing on screen to show it.
 shell_tab_icon :: proc(shell: ^Shell, index: int) -> string {
 	if index < 0 || index >= len(shell.tabs) do return ""
-	switch shell.tabs[index].name {
-	case "tree": return "\uf07b"
-	case "changes": return "\uf126"
-	case "graph": return "\ue725"
-	}
 	return shell.tabs[index].icon
 }
 
@@ -864,4 +862,18 @@ shell_open_help :: proc(shell: ^Shell) {
 	clear(&shell.help_lines)
 	append(&shell.help_lines, ..shell_help_lines(shell))
 	overlay_help(&shell.overlay, shell.help_lines[:])
+}
+
+// Give every tab a second chance to say whether it belongs in the bar. Called when a
+// background exec finishes, which is the moment a `when` that had to ask a process can
+// finally answer -- and the moment its first, necessarily-pending answer stops binding.
+shell_revisit :: proc(shell: ^Shell) {
+	for &tab in shell.tabs {
+		result := tabpkg.tab_revisit(&tab)
+		if result.message != "" {
+			shell_set_footer(shell, result.message)
+			if result.owns_message do delete(result.message)
+		}
+	}
+	shell_ensure_visible_active(shell)
 }

@@ -535,3 +535,21 @@ test_graph_refs_render_as_chips :: proc(t: ^testing.T) {
 	testing.expect(t, strings.has_suffix(label, "v1.0.0"))
 	testing.expect(t, !strings.contains(label, "tag: "))
 }
+
+// Every built-in tab has to carry a drawable icon. The shell used to hold these in a
+// lookup keyed by tab name, so the fields here went unread -- and the changes tab's had
+// quietly become an empty string, which draws as a blank slot in the activity bar.
+@(test)
+test_every_builtin_tab_carries_an_icon :: proc(t: ^testing.T) {
+	root := tabs_test_repo(t)
+	defer { _ = os.remove_all(root); delete(root) }
+
+	built := [?]Tab{tree_tab(root), changes_tab(root), graph_tab(root)}
+	defer for &tab in built do tab_destroy(&tab)
+
+	for &tab in built {
+		testing.expectf(t, tab.icon != "", "%s has no icon", tab.name)
+		// A glyph, not a stray space: the slot is centred on one cell.
+		testing.expectf(t, tui.text_width(tab.icon) == 1, "%s icon is %d cells wide", tab.name, tui.text_width(tab.icon))
+	}
+}

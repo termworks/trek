@@ -83,6 +83,11 @@ Heading_Proc :: proc(data: rawptr) -> Tab_Heading
 // must only read state the tab already computed, never spawn a process.
 Visible_Proc :: proc(data: rawptr) -> bool
 
+// A second chance to answer that question. A `when` predicate that had to ask a
+// background process was necessarily wrong the first time -- the answer had not
+// arrived yet -- and without this the tab stays hidden until the root next changes.
+Revisit_Proc :: proc(data: rawptr) -> Tab_Result
+
 Tab :: struct {
 	name:      string,
 	title:     string,
@@ -99,6 +104,7 @@ Tab :: struct {
 	on_root:   Root_Proc,
 	heading:   Heading_Proc,
 	visible:   Visible_Proc,
+	revisit:   Revisit_Proc,
 }
 
 tab_rows :: proc(tab: ^Tab, width: int, allocator := context.allocator) -> [dynamic]Row {
@@ -157,4 +163,9 @@ tab_visible :: proc(tab: ^Tab) -> bool {
 	if tab == nil do return false
 	if tab.visible == nil do return true
 	return tab.visible(tab.data)
+}
+
+tab_revisit :: proc(tab: ^Tab) -> Tab_Result {
+	if tab == nil || tab.revisit == nil do return {}
+	return tab.revisit(tab.data)
 }

@@ -213,10 +213,19 @@ without one is always shown:
 trek.tab("cargo", {
   icon = "C",
   title = "Cargo",
-  when = function(ctx) return ctx.exec({"test", "-f", ctx.root .. "/Cargo.toml"}) ~= nil end,
+  when = function(ctx)
+    local result = ctx.exec({"test", "-f", ctx.root .. "/Cargo.toml"})
+    return result ~= nil and result.success
+  end,
   rows = function(ctx) return { trek.text("  crate") } end,
 })
 ```
+
+`ctx.exec` answers `nil` until the process it started finishes, so a `when` that
+asks one is necessarily wrong the first time it is called. trek asks every tab
+again the moment a background command completes, which is why the predicate tests
+`result.success` rather than "did I get a result" — the latter is true for a
+command that ran and failed.
 
 The built-in Changes and Graph tabs use the same mechanism: both disappear the
 moment you walk out of a repository and come back when you walk into one. A
@@ -224,6 +233,121 @@ hidden tab holds no slot, so the number keys always address what is on screen,
 and it cannot be reached by `Tab`, by number, or by name. If the tab you are
 looking at disappears, trek falls back to the first one still in the bar.
 
+
+### Plugins
+
+A file in `~/.config/trek/plugins/*.lua` is discovered and run automatically. It
+registers what it wants and returns nothing, exactly like `init.lua`:
+
+```lua
+-- ~/.config/trek/plugins/todo.lua
+local trek = require("trek")
+
+trek.tab("todo", {
+  icon = "T",
+  title = "TODO",
+  rows = function(ctx) ... end,
+})
+```
+
+A worked example ships in `examples/plugins/tags.lua`: the repository's latest
+tags, in a tab that is there only inside a repository.
+
+Nothing has to be required or merged by hand — the host does the discovery, so a
+config that wants somebody else's tab does not grow shape-checking for it.
+
+Plugins run **before** `init.lua`, in name order. Since every registrar is keyed,
+registering the same name again replaces the earlier one, so your own config always
+wins over a plugin's — and prefixing files (`10-`, `20-`) fixes the order between
+plugins rather than leaving it to the filesystem.
+
+A plugin that raises is **reported in the footer and skipped**; the ones after it
+still load. That is deliberately unlike `init.lua`, where a raise is fatal: your own
+file failing means carrying on would silently apply settings you did not ask for,
+while a third-party plugin failing must not take the tool down with it.
+
+## Answering other programs
+
+A running trek can be asked where it is standing. This is a **socket only** — trek writes no
+spawn descriptor, because its truth *is* the process: a fresh `trek` knows nothing about this
+one's root, expansion or selection, so answering from a new process would succeed while being
+wrong.
+
+```sh
+trek --serve            # bind a control socket; without this there is none
+trek --lua-api          # print the client library
+```
+
+The socket lands at `$XDG_RUNTIME_DIR/onix/trek/<pid>.sock`, the same family directory oslo
+uses, so a sibling looks in one place for every tool. The directory is `0700` and a connecting
+uid that is not the owner's is refused, using the credentials the kernel reports rather than
+anything the peer said.
+
+### The surface
+
+Small on purpose: these are facts that exist only inside a running trek. Nothing here runs a
+command — that is a decision, not an omission.
+
+| verb | |
+|---|---|
+| `cwd()` | the directory trek is showing |
+| `selection()` | the path under the cursor, or `nil` |
+| `tabs()` | the panels currently in the activity strip |
+| `session()` | `{id, root, tab, socket}` |
+| `verbs()` | every name this trek will answer |
+| `client()` | the client library, for a host that cannot shell out |
+| `subscribe(event)` | push when trek moves; returns an id |
+| `unsubscribe(id)` | stop pushing |
+
+### From oslo
+
+```lua
+local src  = io.popen("trek --lua-api"):read("a")
+local trek = load(src)(oslo.stream)
+local t    = trek.connect()
+print(t.cwd())
+t:close()
+```
+
+The wire is oslo's: four bytes of big-endian length, then JSON. A request is
+`{"call":name,"args":[…]}` and a reply is `{"ok":true,"n":1,"result":[…]}` — `result` is a
+*list* because a Lua function returns several things, and a family whose members disagree
+about that fails silently rather than loudly. A refused verb is a reply
+(`{"ok":false,"error":"no such call: x"}`), not a dropped connection. One connection serves
+many calls.
+
+### Events
+
+trek can push when it moves, instead of being asked. Two events, both things a sibling cannot
+observe any other way:
+
+| event | fires when |
+|---|---|
+| `root` | trek re-roots — walking into or out of a directory |
+| `selection` | the cursor moves onto a different row |
+
+```lua
+local t = trek.connect()
+
+t:subscribe("root", function(path) oslo.sys.cd(path) end)
+
+while working do
+  t:poll()        -- delivers whatever arrived, here, at a moment you picked
+end
+```
+
+**A function cannot cross a socket**, so `subscribe` hands back an opaque id and the handler
+stays on your side. A push is `{"event":"root","sub":1,"args":[…]}` — it carries `event` where
+a reply carries `ok`, and that one difference is the whole reentrancy contract:
+
+> An event can arrive while a call is outstanding, because trek pushes when it moves rather
+> than when it is asked. `call` therefore reads frames until it finds its *reply* and parks any
+> event it passes on the way. Nothing is dispatched from inside a call — a handler running
+> there could call back into the session it is suspended in, and neither side has an answer for
+> that. `poll` delivers the parked events afterwards, at a moment the caller chose.
+
+A subscriber that stops reading is dropped rather than buffered without end, and a connection
+is capped at eight subscriptions, so one peer cannot grow trek's memory by ignoring it.
 ## State
 
 Preferences and expanded directories are stored in
