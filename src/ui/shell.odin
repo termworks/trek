@@ -532,13 +532,11 @@ shell_viewport_height :: proc(shell: ^Shell, height: int) -> int {
 	return max(height - HEADER_HEIGHT - shell_footer_height(shell), 0)
 }
 
+// A tab carries its own icon. These used to be looked up by name here, which left the
+// icon fields beside the built-in tabs unread — and an unread field rots: the changes
+// tab's had become an empty string with nothing on screen to show it.
 shell_tab_icon :: proc(shell: ^Shell, index: int) -> string {
 	if index < 0 || index >= len(shell.tabs) do return ""
-	switch shell.tabs[index].name {
-	case "tree": return "\uf07b"
-	case "changes": return "\uf126"
-	case "graph": return "\ue725"
-	}
 	return shell.tabs[index].icon
 }
 

@@ -410,7 +410,7 @@ changes_tab :: proc(root: string, allocator := context.allocator) -> Tab {
 	return Tab{
 		name = "changes",
 		title = "Changes",
-		icon = "",
+		icon = "\uf126",
 		data = rawptr(state),
 		rows = changes_rows_proc,
 		on_select = changes_select_proc,

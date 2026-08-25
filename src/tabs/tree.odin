@@ -357,7 +357,7 @@ tree_tab :: proc(
 	return Tab{
 		name = "tree",
 		title = "Explorer",
-		icon = "▤",
+		icon = "\uf07b",
 		data = state,
 		rows = tree_rows_proc,
 		on_key = tree_key_proc,

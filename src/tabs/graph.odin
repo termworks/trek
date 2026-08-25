@@ -311,7 +311,7 @@ graph_tab :: proc(root: string, allocator := context.allocator) -> Tab {
 	return Tab{
 		name = "graph",
 		title = "Graph",
-		icon = "⑂",
+		icon = "\ue725",
 		data = state,
 		rows = graph_rows_proc,
 		on_key = graph_key_proc,
