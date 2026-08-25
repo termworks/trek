@@ -336,7 +336,9 @@ main :: proc() {
 	}
 	target, path_err := filepath.abs(options.root, context.allocator)
 	if path_err != nil {
-		fmt.eprintln("trek: invalid path")
+		// abs() resolves through the filesystem, so a path that is not there fails here
+		// rather than at the stat below. Name it either way.
+		fmt.eprintln("trek:", options.root, "does not exist")
 		os.exit(1)
 	}
 	defer delete(target)
