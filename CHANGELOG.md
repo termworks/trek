@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.1.2] - 2026-08-25
+
+### <!-- 0 -->⛰️  Features
+
+- Add a tags plugin and revisit late tabs
+- Push events to subscribers
+- Answer other programs over a control socket
+- Discover plugins from a config directory
+
+### <!-- 1 -->🐛 Bug Fixes
+
+- Let each tab carry its own icon
+- Keep the tags icon out of the source
+- Port git's own graph.c lane engine
+
 ## [0.1.1] - 2026-08-24
 
 ### <!-- 0 -->⛰️  Features

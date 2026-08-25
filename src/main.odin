@@ -13,7 +13,7 @@ import tui "./tui"
 import live "./live"
 import ui "./ui"
 
-VERSION :: "0.1.1"
+VERSION :: "0.1.2"
 
 Options :: struct {
 	root:      string,
