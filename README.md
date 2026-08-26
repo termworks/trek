@@ -275,6 +275,32 @@ still load. That is deliberately unlike `init.lua`, where a raise is fatal: your
 file failing means carrying on would silently apply settings you did not ask for,
 while a third-party plugin failing must not take the tool down with it.
 
+## Previewing, when hexe is drawing
+
+Press `p` and the selected row appears in a second float beside this one: `bat` for a
+file, `eza` for a directory, following the cursor as it moves. Press it again to close.
+
+trek does not draw any of that. It knows *what is selected*; hexe knows how to put a
+pane beside another one — so trek hands over a path and hexe renders it, and trek never
+learns what `bat` or `eza` are. Outside hexe the key answers `preview needs hexe` and
+nothing else in trek changes.
+
+```
+p ──► trek steps left, a float opens on the right
+      cursor moves ──► the path goes down a fifo ──► bat/eza redraws
+      q or p       ──► the fifo closes, the float ends
+```
+
+The channel is a fifo trek holds open for writing, and that choice does the cleanup:
+the reader sees EOF the moment trek's descriptor closes, so the preview dies with trek
+whether trek exited or crashed. There is no float to orphan and no pid to remember. The
+descriptor is opened `O_CLOEXEC` for the same reason — without it the float trek spawns
+inherits it, becomes a writer itself, and the reader waits on a pipe that can never end.
+
+Stepping aside uses hexe's `geometry` on trek's own pane socket, which costs `read`
+there because the selector cannot reach past the caller. An older hexe refuses that
+verb by name; the preview still opens, beside a float that did not move.
+
 ## Answering other programs
 
 A running trek can be asked where it is standing. This is a **socket only** — trek writes no

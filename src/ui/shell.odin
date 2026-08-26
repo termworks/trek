@@ -815,6 +815,7 @@ SHELL_HELP_COMMON := []string{
 	"Act",
 	"  ⏎          open, or toggle a folder",
 	"  m          menu for the selected row",
+	"  p          preview beside this pane (hexe)",
 	"  ?          this list",
 	"  q          quit",
 }

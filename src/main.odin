@@ -11,6 +11,7 @@ import settings "./settings"
 import tabs "./tabs"
 import tui "./tui"
 import live "./live"
+import preview "./preview"
 import ui "./ui"
 
 VERSION :: "0.1.3"
@@ -113,6 +114,7 @@ usage :: proc() {
 	fmt.println("Keys:")
 	fmt.println("  ↑↓ move   Enter open   ← parent/collapse   a explorer mode")
 	fmt.println("  . hidden  r refresh    m menu   1-9 tabs    q quit")
+	fmt.println("  p preview the selected row in a second float (inside hexe)")
 }
 
 run_suspended :: proc(config: ^luaconfig.Engine, terminal: ^tui.Terminal, buffer: ^tui.Buffer) -> bool {
@@ -221,6 +223,12 @@ run_tui :: proc(root: string, options: Options) -> bool {
 
 	// Opt-in: a run nobody asks about has no socket at all, which is what makes the
 	// feature safe to leave available by default.
+	// The preview is hexe's to draw. Inert everywhere else, and nothing below has to
+	// ask whether we are inside hexe.
+	viewer: preview.Preview
+	preview.init(&viewer)
+	defer preview.destroy(&viewer)
+
 	server: live.Server
 	if options.serve {
 		if path, ok := live.serve(&server); ok {
@@ -241,6 +249,9 @@ run_tui :: proc(root: string, options: Options) -> bool {
 			ui.shell_reload(&shell)
 		}
 		live_state := live_snapshot(&shell)
+		// The same snapshot the socket answers from, so the preview follows exactly
+		// what a peer would be told is selected.
+		preview.follow(&viewer, live_state.selection)
 		live.notice(&server, &watch, live_state)
 		live.poll(&server, live_state)
 		if tui.terminal_take_resize() {
@@ -286,6 +297,13 @@ run_tui :: proc(root: string, options: Options) -> bool {
 					is_dir = row.is_dir
 				}
 				handled, message := luaconfig.engine_handle_key(&config, tab_name, event.key, row_path, is_dir)
+				// `p` is trek's, not a tab's: the preview is about the selected row
+				// whichever list produced it. A config that binds `p` still wins, so
+				// this is asked after Lua and before the shell.
+				if !handled && event.key.code == .Rune && event.key.rune == 'p' {
+					ui.shell_set_footer(&shell, preview.toggle(&viewer))
+					handled = true
+				}
 				if handled {
 					if message != "" {
 						ui.shell_set_footer(&shell, message)
