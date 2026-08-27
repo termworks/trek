@@ -55,6 +55,7 @@ trek src/main.odin        # opens src/, cursor on main.odin
 |---|---|
 | `-e`, `--explore` | start in explorer mode |
 | `--cwd-file PATH` | write the directory trek finished in to `PATH` |
+| `--width N`, `--height N` | cells, or a share of the terminal: `--width 50%` |
 | `-h`, `--help` | show help |
 | `-V`, `--version` | show the version |
 
@@ -109,8 +110,8 @@ trek --width 40 --align bottom-right         # a corner panel, full height
 
 | setting | |
 |---|---|
-| `--width N` / `trek.width` | viewport columns; `0` or absent fills the terminal |
-| `--height N` / `trek.height` | viewport rows |
+| `--width N` / `trek.width` | viewport columns, or a share: `50%` / `"50%"`. `0` or absent fills the terminal |
+| `--height N` / `trek.height` | viewport rows, or a share: `80%` / `"80%"` |
 | `--align WHERE` / `trek.align` | `center` (default), `top-left`, `top-right`, `bottom-left`, `bottom-right` |
 | `trek.border` | frame the box when it does not fill the terminal (default `true`) |
 
@@ -286,10 +287,22 @@ learns what `bat` or `eza` are. Outside hexe the key answers `preview needs hexe
 nothing else in trek changes.
 
 ```
-p ──► trek steps left, a float opens on the right
+p ──► a float opens hard right, trek moves hard left
       cursor moves ──► the path goes down a fifo ──► bat/eza redraws
       q or p       ──► the fifo closes, the float ends
 ```
+
+The order is not incidental. Opening a float puts every *other* float back at the
+position it was declared with, so an explorer that stepped aside first would be moved
+back underneath the preview. It opens first and trek moves second, and trek then asks
+hexe where it actually ended up: if the move did not take, there is no preview rather
+than one covering the thing it describes.
+
+The two are anchored to opposite edges with their widths adding to the window, so they
+are adjacent by construction. `x` in hexe is an anchor in the space a float does not
+fill — 0 flush left, 100 flush right — not a centre and not a left edge; reading it as
+a centre is how a pair that computes as adjacent lands twenty-four columns on top of
+itself.
 
 The channel is a fifo trek holds open for writing, and that choice does the cleanup:
 the reader sees EOF the moment trek's descriptor closes, so the preview dies with trek

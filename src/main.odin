@@ -23,8 +23,8 @@ Options :: struct {
 	reveal:    string,
 	explore:   bool,
 	serve:     bool,
-	width:     int,
-	height:    int,
+	width:     tui.Extent,
+	height:    tui.Extent,
 	align:     string,
 	help:      bool,
 	version:   bool,
@@ -60,13 +60,13 @@ parse_options :: proc(args: []string, default_root: string) -> Options {
 				options.align = value
 				break
 			}
-			number, parsed := strconv.parse_int(value)
-			if !parsed || number < 0 {
-				options.error = "size must be a positive number"
+			extent, parsed := tui.extent_parse(value)
+			if !parsed {
+				options.error = "size must be a number of cells or a percentage, like 60 or 50%"
 			} else if arg == "--width" {
-				options.width = number
+				options.width = extent
 			} else {
-				options.height = number
+				options.height = extent
 			}
 		case "--cwd-file":
 			// Where trek reports the directory it finished in. A child process cannot
@@ -105,8 +105,8 @@ usage :: proc() {
 	fmt.println("      --serve          bind a control socket other programs can query")
 	fmt.println("      --lua-api        print the client library, then exit")
 	fmt.println("      --cwd-file PATH  write the directory trek finished in to PATH")
-	fmt.println("      --width N        viewport columns (default: the terminal)")
-	fmt.println("      --height N       viewport rows (default: the terminal)")
+	fmt.println("      --width N|N%     viewport columns, or a share of the terminal")
+	fmt.println("      --height N|N%    viewport rows, or a share of the terminal")
 	fmt.println("      --align WHERE    center, top-left, top-right, bottom-left, bottom-right")
 	fmt.println("  -h, --help           show this help")
 	fmt.println("  -V, --version        show the version")
@@ -208,8 +208,8 @@ run_tui :: proc(root: string, options: Options) -> bool {
 	}
 
 	// CLI overrides config, and config overrides filling the terminal.
-	width_setting := options.width if options.width > 0 else config.settings.width
-	height_setting := options.height if options.height > 0 else config.settings.height
+	width_setting := options.width if options.width.value > 0 else config.settings.width
+	height_setting := options.height if options.height.value > 0 else config.settings.height
 	align_name := options.align if options.align != "" else config.settings.align
 	align_setting, _ := tui.align_parse(align_name)
 	border_setting := config.settings.border
@@ -259,7 +259,13 @@ run_tui :: proc(root: string, options: Options) -> bool {
 				tui.buffer_resize(&buffer, new_width, new_height)
 			}
 		}
-		view = tui.viewport_rect(buffer.width, buffer.height, width_setting, height_setting, align_setting)
+		view = tui.viewport_rect(
+			buffer.width,
+			buffer.height,
+			tui.extent_cells(width_setting, buffer.width),
+			tui.extent_cells(height_setting, buffer.height),
+			align_setting,
+		)
 		inner := view
 		framed := border_setting && (view.width < buffer.width || view.height < buffer.height)
 		if framed {

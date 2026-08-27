@@ -21,20 +21,64 @@ import "core:strings"
 import c "core:c"
 import "core:sys/posix"
 
-// Where trek's own float goes while the preview is beside it, and where the preview
-// goes. Percentages of the hexe window: `x` is the float's centre, which is what
-// hexe's geometry reports and takes.
-TREK_X :: 15
-TREK_WIDTH :: 30
-PREVIEW_WIDTH :: 50
-PREVIEW_HEIGHT :: 70
-// hexe's `--size` takes a shift from centre rather than a position, so the same place
-// is said differently to the two APIs.
-PREVIEW_SHIFT_X :: 10
+// Everything here is a percentage of the hexe window, and `x` is an ANCHOR inside the
+// space the float does not fill: 0 is flush left, 100 flush right, 50 centred. A float
+// of width W therefore has its left edge at `(100 - W) * x / 100`, not at `x` and not
+// at `x - W/2`.
+//
+// That is worth stating because both simpler readings look right in the numbers and
+// are wrong on screen. Read as centres, trek at `x=15 w=30` and a preview at `x=65
+// w=70` compute as adjacent; measured in cells on a 135-column window they are
+// [16,52) and [28,118), which is twenty-four columns of one drawn over the other.
 
-Geometry :: struct {
+// Where trek asks to stand once a preview is beside it: the left band.
+TREK_WIDTH :: 30
+// Narrower than this and a preview is not worth the room it takes.
+MIN_PREVIEW :: 20
+
+// A float's place, in percent, with `x`/`y` the centre.
+Rect :: struct {
 	x, y, width, height: int,
 	known:               bool,
+}
+
+left_edge :: proc(rect: Rect) -> int {
+	if rect.width >= 100 do return 0
+	return (100 - rect.width) * rect.x / 100
+}
+
+right_edge :: proc(rect: Rect) -> int {
+	return left_edge(rect) + rect.width
+}
+
+// Do these two boxes share any column?
+overlaps :: proc(a, b: Rect) -> bool {
+	return left_edge(a) < right_edge(b) && right_edge(a) > left_edge(b)
+}
+
+// The whole width, cut in two: the explorer on the left, the preview on the right.
+//
+// Adjacent by construction rather than by arithmetic done twice -- the preview starts
+// exactly where the explorer ends, so there is no rounding gap to land in and no
+// overlap to check for afterwards.
+//
+// The explorer keeps its own width when that leaves room, and is narrowed when it does
+// not. A window with no room for both gets no preview at all: a preview squeezed into
+// a few columns shows nothing and costs the explorer the space it had.
+split :: proc(trek: Rect) -> (explorer, preview: Rect, ok: bool) {
+	if !trek.known do return {}, {}, false
+	width := trek.width
+	if width <= 0 || 100 - width < MIN_PREVIEW do width = TREK_WIDTH
+	if 100 - width < MIN_PREVIEW do return {}, {}, false
+
+	// Flush to opposite edges, with the widths adding up to the whole window. Anchors
+	// rather than computed positions: 0 and 100 mean "against that edge" whatever the
+	// width works out to in cells, so the two cannot drift into each other on a window
+	// size that divides badly.
+	rest := 100 - width
+	explorer = Rect{x = 0, y = trek.y, width = width, height = trek.height, known = true}
+	preview = Rect{x = 100, y = trek.y, width = rest, height = trek.height, known = true}
+	return explorer, preview, true
 }
 
 Preview :: struct {
@@ -48,7 +92,7 @@ Preview :: struct {
 	// Held open for writing for as long as the preview is up: it is what keeps the
 	// reader from seeing EOF, and closing it is how the float is dismissed.
 	fifo:        posix.FD,
-	saved:       Geometry,
+	saved:       Rect,
 	// The last path handed over, so a redraw that did not move the cursor costs nothing.
 	shown:       string,
 	allocator:   runtime.Allocator,
@@ -123,16 +167,21 @@ call :: proc(state: ^Preview, request: string, allocator := context.temp_allocat
 	return string(body), true
 }
 
-// hexe answers `{"ok":true,"n":1,"result":[{...}]}`. Anything else -- a refusal, a
-// version that does not serve this verb on a pane's socket -- reads as "not known",
-// and the caller carries on without moving anything.
-geometry :: proc(state: ^Preview) -> Geometry {
-	body, ok := call(state, `{"call":"geometry"}`)
+// Where this float is, asked of hexe.
+//
+// `pane` rather than `geometry`, because `pane` is answerable on a pane's own socket
+// in every hexe that has one, while `geometry` there is newer. Reading has to work on
+// the old one too: it is what the no-overlap guarantee is computed from.
+self :: proc(state: ^Preview) -> Rect {
+	body, ok := call(state, `{"call":"pane"}`)
 	if !ok do return {}
-	return parse_geometry(body)
+	return parse_self(body)
 }
 
-parse_geometry :: proc(body: string) -> Geometry {
+// hexe answers `{"ok":true,"n":1,"result":[{...}]}` -- a *list* of return values, so
+// the record is inside `result`, not `result` itself. Anything else, including a
+// refusal, reads as "not known" and the preview declines rather than guessing.
+parse_self :: proc(body: string) -> Rect {
 	parsed, err := json.parse_string(body, allocator = context.temp_allocator)
 	if err != nil do return {}
 	root, is_object := parsed.(json.Object)
@@ -142,6 +191,9 @@ parse_geometry :: proc(body: string) -> Geometry {
 	if !has_result || len(results) == 0 do return {}
 	record, is_record := results[0].(json.Object)
 	if !is_record do return {}
+	// A tiled pane has no percentage geometry: the layout owns its rect, so there is
+	// no band beside it to put anything in.
+	if floating, found := record["is_float"].(json.Boolean); !found || !floating do return {}
 
 	field :: proc(record: json.Object, name: string) -> int {
 		#partial switch value in record[name] {
@@ -150,21 +202,32 @@ parse_geometry :: proc(body: string) -> Geometry {
 		}
 		return 0
 	}
-	return Geometry {
-		x = field(record, "x"),
-		y = field(record, "y"),
-		width = field(record, "width"),
-		height = field(record, "height"),
+	return Rect {
+		x = field(record, "pos_x_pct"),
+		y = field(record, "pos_y_pct"),
+		width = field(record, "width_pct"),
+		height = field(record, "height_pct"),
 		known = true,
 	}
 }
 
 // Move this float. A hexe that does not serve `geometry` on a pane's socket refuses
-// this by name, which is not an error worth reporting: the preview still opens, it
-// simply opens beside a float that did not step aside.
-move :: proc(state: ^Preview, spec: string) {
-	request := fmt.aprintf(`{{"call":"geometry","arg":%s}}`, spec, allocator = context.temp_allocator)
+// this by name, which is not an error worth reporting: the preview then goes beside
+// trek wherever trek actually is, which is why the caller re-reads afterwards.
+move :: proc(state: ^Preview, rect: Rect) {
+	request := fmt.aprintf(
+		`{{"call":"geometry","arg":{{"x":%d,"width":%d}}}}`,
+		rect.x,
+		rect.width,
+		allocator = context.temp_allocator,
+	)
 	_, _ = call(state, request)
+}
+
+// Ask for the cursor back. Opening a float takes focus, and the explorer is what the
+// keys are for -- a preview nobody can navigate away from is worse than no preview.
+focus :: proc(state: ^Preview) {
+	_, _ = call(state, `{"call":"focus"}`)
 }
 
 // ---------------------------------------------------------------- the float, over the CLI
@@ -192,7 +255,7 @@ runtime_dir :: proc(allocator := context.allocator) -> string {
 	return path
 }
 
-open :: proc(state: ^Preview) -> bool {
+open :: proc(state: ^Preview, rect: Rect) -> bool {
 	dir := runtime_dir(context.temp_allocator)
 	if os.make_directory_all(dir) != nil && !os.exists(dir) do return false
 	_ = os.chmod(dir, os.Permissions{.Read_User, .Write_User, .Execute_User})
@@ -219,7 +282,16 @@ open :: proc(state: ^Preview) -> bool {
 	if state.fifo < 0 do return false
 
 	command := fmt.aprintf("sh %s", state.script_path, allocator = context.temp_allocator)
-	size := fmt.aprintf("%d,%d,%d,0", PREVIEW_WIDTH, PREVIEW_HEIGHT, PREVIEW_SHIFT_X, allocator = context.temp_allocator)
+	// `--size` states a shift from centre where geometry states a centre, so the same
+	// place has to be said differently to the two APIs.
+	size := fmt.aprintf(
+		"%d,%d,%d,%d",
+		rect.width,
+		rect.height,
+		rect.x - 50,
+		rect.y - 50,
+		allocator = context.temp_allocator,
+	)
 	description := os.Process_Desc {
 		command = []string {
 			"hexe", "terminal", "float",
@@ -244,12 +316,33 @@ toggle :: proc(state: ^Preview) -> string {
 		close(state)
 		return "preview off"
 	}
-	state.saved = geometry(state)
-	if !open(state) {
+	state.saved = self(state)
+	if !state.saved.known do return "preview needs a float to sit beside"
+	explorer, beside, room := split(state.saved)
+	if !room do return "no room beside the explorer"
+
+	// Open first, step aside second. Opening a float puts every other float back at the
+	// position it was declared with, so an explorer that moved before this would be
+	// moved back underneath the preview -- which is exactly how the two ended up on top
+	// of each other.
+	if !open(state, beside) {
 		close(state)
 		return "preview could not start"
 	}
-	move(state, fmt.aprintf(`{{"x":%d,"width":%d}}`, TREK_X, TREK_WIDTH, allocator = context.temp_allocator))
+	move(state, explorer)
+
+	// Say it rather than assume it. If the move did not take -- an older hexe does not
+	// serve `geometry` on a pane's socket -- the two would be sitting on top of each
+	// other, and no preview is better than one covering the thing it describes.
+	standing := self(state)
+	if !standing.known || overlaps(standing, beside) {
+		close(state)
+		return "this hexe cannot move the explorer aside"
+	}
+
+	// Opening a float takes the cursor with it, and the explorer is what the keys are
+	// for. An older hexe refuses this too; the preview is still worth having.
+	focus(state)
 	state.active = true
 	return "preview on"
 }
@@ -286,7 +379,8 @@ close :: proc(state: ^Preview) {
 		state.script_path = ""
 	}
 	if state.active && state.saved.known {
-		move(state, fmt.aprintf(`{{"x":%d,"width":%d}}`, state.saved.x, state.saved.width, allocator = context.temp_allocator))
+		move(state, state.saved)
+		focus(state)
 	}
 	delete(state.shown, state.allocator)
 	state.shown = ""
