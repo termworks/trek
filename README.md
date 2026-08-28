@@ -29,7 +29,9 @@ make configs
 
 `make build` produces `target/trek` and rejects a dynamically linked artifact.
 `make smoke` keeps that binary open in a PTY until delayed input arrives.
-`make configs` installs `config/` into `$XDG_CONFIG_HOME/trek`.
+`make configs` installs `config/` into `$XDG_CONFIG_HOME/trek`, and `make install`
+ends with it — a binary newer than the config it reads is how a new setting silently
+does nothing.
 
 Focused tests can be selected without bypassing the project recipes:
 

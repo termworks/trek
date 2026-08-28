@@ -353,12 +353,16 @@ make.alias("c", "compile")
 
 make.recipe{
   name = "install",
-  desc = "put the binary in $PREFIX/bin",
+  desc = "put the binary in $PREFIX/bin, and config/ where it reads it",
   deps = { "build" },
   run = function()
     sh.install("-d", PREFIX .. "/bin")
     sh.install("-m", "0755", BIN, PREFIX .. "/bin/" .. NAME)
     print("installed -> " .. PREFIX .. "/bin/" .. NAME)
+    -- Last, and part of the install rather than a step to remember: a binary newer than
+    -- the config it reads is how a setting that shipped together with it silently does
+    -- nothing. Run alone, `configs` still installs only the config.
+    make.run("configs")
   end,
 }
 
