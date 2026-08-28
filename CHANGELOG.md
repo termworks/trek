@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.4] - 2026-08-28
+
+### <!-- 0 -->⛰️  Features
+
+- Show the selected row in a hexe float
+- Land the cursor on a row at launch
+- Tell oslo where the walk went
+
+### <!-- 1 -->🐛 Bug Fixes
+
+- Place the float where hexe actually puts it
+- Name the path that does not exist
+
 ## [0.1.3] - 2026-08-25
 
 ## [0.1.2] - 2026-08-25
