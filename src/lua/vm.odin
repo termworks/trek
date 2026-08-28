@@ -22,6 +22,7 @@ Settings :: struct {
 	height:          tui.Extent,
 	align:           string,
 	border:          bool,
+	preview_shrink:  int,
 }
 
 Tab_Def :: struct {

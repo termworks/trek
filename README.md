@@ -280,6 +280,13 @@ while a third-party plugin failing must not take the tool down with it.
 
 Press `p` and the selected row appears in a second float beside this one: `bat` for a
 file, `eza` for a directory, following the cursor as it moves. Press it again to close.
+The explorer gives up a share of its width while the preview is up — `--preview-shrink 40`,
+or `trek.preview_shrink = 40` — because a list of names needs far less room than the file
+beside it.
+
+The cursor stays in the explorer. Scrolling the preview moves hexe's focus there, and from
+that moment the arrow keys would be scrolling a file instead of choosing one, so trek asks
+for the cursor back when it notices something else holding it.
 
 trek does not draw any of that. It knows *what is selected*; hexe knows how to put a
 pane beside another one — so trek hands over a path and hexe renders it, and trek never

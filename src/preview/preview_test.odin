@@ -135,3 +135,44 @@ test_the_two_placement_apis_describe_the_same_box :: proc(t: ^testing.T) {
 	// 70 wide, 70 tall, anchored hard right, vertically where the explorer already is.
 	testing.expect_value(t, size, "70,70,50,0")
 }
+
+// The explorer gives up a share of itself so the file beside it has room. A list of
+// names needs far less width than the thing it is listing.
+@(test)
+test_the_explorer_shrinks_for_a_preview :: proc(t: ^testing.T) {
+	trek := Rect{x = 50, y = 50, width = 30, height = 70, known = true}
+
+	kept, _, _ := split(trek, 0)
+	testing.expect_value(t, kept.width, 30)
+
+	// 40% off 30 leaves 18, and the preview takes everything else.
+	narrow, beside, ok := split(trek, 40)
+	testing.expect(t, ok)
+	testing.expect_value(t, narrow.width, 18)
+	testing.expect_value(t, beside.width, 82)
+	testing.expect(t, !overlaps(narrow, beside))
+	testing.expect_value(t, right_edge(narrow), left_edge(beside))
+}
+
+// A shrink that would leave nothing to read is refused rather than honoured: the
+// explorer falls back to a width that still leaves room for both.
+@(test)
+test_an_absurd_shrink_does_not_erase_the_explorer :: proc(t: ^testing.T) {
+	wide := Rect{x = 50, y = 50, width = 95, height = 70, known = true}
+	kept, beside, ok := split(wide, 99)
+	testing.expect(t, ok)
+	testing.expect(t, kept.width > 0)
+	testing.expect(t, beside.width >= MIN_PREVIEW)
+	testing.expect(t, !overlaps(kept, beside))
+}
+
+// A pod inherits `HEXE_PANE_UUID` from whoever launched it rather than being given its
+// own. Measured: a trek float carried the uuid of the terminal that spawned it. The
+// float CLI routes on that variable, so it has to be replaced with this pane's own or
+// the preview is asked for beside somebody else's pane.
+@(test)
+test_the_pane_record_carries_its_own_name :: proc(t: ^testing.T) {
+	answer := parse_self(`{"ok":true,"n":1,"result":[{"is_float":true,"uuid":"abc123","pos_x_pct":50,"width_pct":30}]}`)
+	testing.expect(t, answer.known)
+	testing.expect_value(t, answer.uuid, "abc123")
+}

@@ -21,6 +21,8 @@ Options :: struct {
 	cwd_file:  string,
 	// A file given as the path: the row to land on once its directory is open.
 	reveal:    string,
+	// Percent of its width the explorer gives up while a preview is beside it.
+	shrink:    int,
 	explore:   bool,
 	serve:     bool,
 	width:     tui.Extent,
@@ -68,6 +70,18 @@ parse_options :: proc(args: []string, default_root: string) -> Options {
 			} else {
 				options.height = extent
 			}
+		case "--preview-shrink":
+			if index >= len(args) {
+				options.error = "option needs a value"
+				break
+			}
+			number, parsed := strconv.parse_int(args[index])
+			index += 1
+			if !parsed || number < 0 || number > 99 {
+				options.error = "--preview-shrink takes a percentage between 0 and 99"
+			} else {
+				options.shrink = number
+			}
 		case "--cwd-file":
 			// Where trek reports the directory it finished in. A child process cannot
 			// change its parent's working directory, so a shell that wants to follow
@@ -105,6 +119,7 @@ usage :: proc() {
 	fmt.println("      --serve          bind a control socket other programs can query")
 	fmt.println("      --lua-api        print the client library, then exit")
 	fmt.println("      --cwd-file PATH  write the directory trek finished in to PATH")
+	fmt.println("      --preview-shrink N  percent of its width the explorer gives up to a preview")
 	fmt.println("      --width N|N%     viewport columns, or a share of the terminal")
 	fmt.println("      --height N|N%    viewport rows, or a share of the terminal")
 	fmt.println("      --align WHERE    center, top-left, top-right, bottom-left, bottom-right")
@@ -227,6 +242,7 @@ run_tui :: proc(root: string, options: Options) -> bool {
 	// ask whether we are inside hexe.
 	viewer: preview.Preview
 	preview.init(&viewer)
+	viewer.shrink = options.shrink if options.shrink > 0 else config.settings.preview_shrink
 	defer preview.destroy(&viewer)
 
 	server: live.Server
@@ -252,6 +268,9 @@ run_tui :: proc(root: string, options: Options) -> bool {
 		// The same snapshot the socket answers from, so the preview follows exactly
 		// what a peer would be told is selected.
 		preview.follow(&viewer, live_state.selection)
+		// Scrolling the preview moves hexe's focus there; without this the arrow keys
+		// would be scrolling a file instead of choosing one.
+		preview.keep_focus(&viewer)
 		live.notice(&server, &watch, live_state)
 		live.poll(&server, live_state)
 		if tui.terminal_take_resize() {

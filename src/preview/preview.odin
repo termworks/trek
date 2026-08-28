@@ -18,6 +18,7 @@ import "core:fmt"
 import "core:os"
 import "core:path/filepath"
 import "core:strings"
+import "core:time"
 import c "core:c"
 import "core:sys/posix"
 
@@ -35,10 +36,15 @@ import "core:sys/posix"
 TREK_WIDTH :: 30
 // Narrower than this and a preview is not worth the room it takes.
 MIN_PREVIEW :: 20
+// How often to ask hexe who holds the cursor, in milliseconds. Slower than the input
+// loop: nothing can steal focus without the user acting first.
+FOCUS_INTERVAL :: 250
 
 // A float's place, in percent, with `x`/`y` the centre.
 Rect :: struct {
 	x, y, width, height: int,
+	// hexe's name for this pane. Only the record read from `pane` carries one.
+	uuid:                string,
 	known:               bool,
 }
 
@@ -65,10 +71,14 @@ overlaps :: proc(a, b: Rect) -> bool {
 // The explorer keeps its own width when that leaves room, and is narrowed when it does
 // not. A window with no room for both gets no preview at all: a preview squeezed into
 // a few columns shows nothing and costs the explorer the space it had.
-split :: proc(trek: Rect) -> (explorer, preview: Rect, ok: bool) {
+split :: proc(trek: Rect, shrink := 0) -> (explorer, preview: Rect, ok: bool) {
 	if !trek.known do return {}, {}, false
 	width := trek.width
-	if width <= 0 || 100 - width < MIN_PREVIEW do width = TREK_WIDTH
+	if width <= 0 do width = TREK_WIDTH
+	// The explorer gives up a share of itself to the preview. A list of names needs
+	// far less width than the file beside it, and the room has to come from somewhere.
+	if shrink > 0 && shrink < 100 do width = max(width * (100 - shrink) / 100, 1)
+	if 100 - width < MIN_PREVIEW do width = TREK_WIDTH
 	if 100 - width < MIN_PREVIEW do return {}, {}, false
 
 	// Flush to opposite edges, with the widths adding up to the whole window. Anchors
@@ -85,6 +95,9 @@ Preview :: struct {
 	// Inside hexe, with a pane socket to talk to. False everywhere else, and every
 	// entry point returns immediately.
 	available:   bool,
+	// Percent of its own width the explorer gives up while a preview is beside it.
+	shrink:      int,
+	checked:     time.Time,
 	active:      bool,
 	socket_path: string,
 	fifo_path:   string,
@@ -202,7 +215,10 @@ parse_self :: proc(body: string) -> Rect {
 		}
 		return 0
 	}
+	uuid := ""
+	if text, is_text := record["uuid"].(json.String); is_text do uuid = string(text)
 	return Rect {
+		uuid = uuid,
 		x = field(record, "pos_x_pct"),
 		y = field(record, "pos_y_pct"),
 		width = field(record, "width_pct"),
@@ -230,6 +246,40 @@ focus :: proc(state: ^Preview) {
 	_, _ = call(state, `{"call":"focus"}`)
 }
 
+// Whether hexe says the cursor is here.
+holds_focus :: proc(state: ^Preview) -> bool {
+	body, ok := call(state, `{"call":"pane"}`)
+	if !ok do return true
+	parsed, err := json.parse_string(body, allocator = context.temp_allocator)
+	if err != nil do return true
+	root := parsed.(json.Object) or_else nil
+	if root == nil do return true
+	results, has_result := root["result"].(json.Array)
+	if !has_result || len(results) == 0 do return true
+	record, is_record := results[0].(json.Object)
+	if !is_record do return true
+	held, found := record["focused"].(json.Boolean)
+	if !found do return true
+	return bool(held)
+}
+
+// Take the cursor back if something else has it.
+//
+// Scrolling the preview -- or clicking it -- moves hexe's focus there, and from that
+// moment the arrow keys are scrolling a file instead of choosing one: the explorer
+// looks stuck on whatever was open. Since trek wakes every tick anyway, it can notice
+// and take the cursor back without the user having to know which pane holds it.
+//
+// Asked at a slower rate than the loop runs, because this is two round trips and the
+// answer cannot change without the user having done something first.
+keep_focus :: proc(state: ^Preview) {
+	if !state.active do return
+	now := time.now()
+	if time.duration_milliseconds(time.diff(state.checked, now)) < FOCUS_INTERVAL do return
+	state.checked = now
+	if !holds_focus(state) do focus(state)
+}
+
 // ---------------------------------------------------------------- the float, over the CLI
 
 // The reader is a file rather than a quoted argument: `--command` carries one string
@@ -237,13 +287,18 @@ focus :: proc(state: ^Preview) {
 // intact.
 READER :: `#!/bin/sh
 # Written by trek. One line in, one screen out; EOF ends it and the float closes.
+#
+# Output is cut to the rows the float has. Without that a long file scrolls the pane
+# while it is written and settles showing its END, which reads as the preview starting
+# somewhere in the middle of the file.
 while IFS= read -r target; do
+  rows=$(tput lines 2>/dev/null || echo 40)
   printf '\033[H\033[2J'
   if [ -d "$target" ]; then
-    eza -la --icons --color=always -- "$target" 2>/dev/null || ls -la -- "$target"
+    { eza -la --icons --color=always -- "$target" 2>/dev/null || ls -la -- "$target"; } | head -n "$rows"
   elif [ -f "$target" ]; then
-    bat --color=always --style=numbers --paging=never --line-range=:400 -- "$target" 2>/dev/null \
-      || head -c 100000 -- "$target"
+    { bat --color=always --style=numbers --paging=never --line-range=":$rows" -- "$target" 2>/dev/null \
+      || head -c 100000 -- "$target"; } | head -n "$rows"
   fi
 done < "%s"
 `
@@ -253,6 +308,26 @@ runtime_dir :: proc(allocator := context.allocator) -> string {
 	if base == "" do base = "/tmp"
 	path, _ := filepath.join([]string{base, "trek"}, allocator)
 	return path
+}
+
+
+// The environment for the float, with this pane's own identity in it.
+//
+// A pod inherits `HEXE_PANE_UUID` from whoever launched it rather than being given its
+// own, so trek can be carrying the uuid of the pane that *opened* it -- measured: a
+// trek float held the uuid of the terminal that spawned it. `hexe terminal float`
+// routes on that variable, so leaving it alone asks hexe to put the preview beside
+// somebody else's pane, in whatever session that is.
+pane_env :: proc(state: ^Preview, rect: Rect, allocator: runtime.Allocator) -> []string {
+	current, err := os.environ(allocator)
+	if err != nil || rect.uuid == "" do return nil
+	out := make([dynamic]string, 0, len(current) + 1, allocator)
+	for entry in current {
+		if strings.has_prefix(entry, "HEXE_PANE_UUID=") do continue
+		append(&out, entry)
+	}
+	append(&out, fmt.aprintf("HEXE_PANE_UUID=%s", rect.uuid, allocator = allocator))
+	return out[:]
 }
 
 open :: proc(state: ^Preview, rect: Rect) -> bool {
@@ -292,7 +367,19 @@ open :: proc(state: ^Preview, rect: Rect) -> bool {
 		rect.y - 50,
 		allocator = context.temp_allocator,
 	)
+	// Real descriptors, not nil. `Process_Desc` treats a nil handle as "shut that
+	// stream down", so a child spawned with three nils has no stdin, stdout or stderr
+	// -- and `hexe terminal float` then fails without being able to say so. That is a
+	// float that never appears and an empty log to explain it.
+	null, null_err := os.open("/dev/null", os.O_RDWR)
+	if null_err != nil do return false
+	defer os.close(null)
+
 	description := os.Process_Desc {
+		env = pane_env(state, rect, context.temp_allocator),
+		stdin = null,
+		stdout = null,
+		stderr = null,
 		command = []string {
 			"hexe", "terminal", "float",
 			"--title", "preview",
@@ -318,7 +405,7 @@ toggle :: proc(state: ^Preview) -> string {
 	}
 	state.saved = self(state)
 	if !state.saved.known do return "preview needs a float to sit beside"
-	explorer, beside, room := split(state.saved)
+	explorer, beside, room := split(state.saved, state.shrink)
 	if !room do return "no room beside the explorer"
 
 	// Open first, step aside second. Opening a float puts every other float back at the
