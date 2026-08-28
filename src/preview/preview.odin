@@ -285,7 +285,15 @@ keep_focus :: proc(state: ^Preview) {
 // The reader is a file rather than a quoted argument: `--command` carries one string
 // through hexe's own parsing, and a shell loop with quotes in it does not survive that
 // intact.
-READER :: `#!/bin/sh
+// The reader is a file rather than a quoted argument: `--command` carries one string
+// through hexe's own parsing, and a shell loop with quotes in it does not survive that
+// intact.
+//
+// Split in two and joined, never formatted. `fmt.aprintf` reads `{` as the start of a
+// verb, so putting this through it turned every `{ ...; }` group into
+// `%!(MISSING CLOSE BRACE)` -- a script `sh` refused, in a float that closed the
+// instant it opened, reported by the CLI as a clean exit 0.
+READER_HEAD :: `#!/bin/sh
 # Written by trek. One line in, one screen out; EOF ends it and the float closes.
 #
 # Output is cut to the rows the float has. Without that a long file scrolls the pane
@@ -300,7 +308,8 @@ while IFS= read -r target; do
     { bat --color=always --style=numbers --paging=never --line-range=":$rows" -- "$target" 2>/dev/null \
       || head -c 100000 -- "$target"; } | head -n "$rows"
   fi
-done < "%s"
+done < "`
+READER_TAIL :: `"
 `
 
 runtime_dir :: proc(allocator := context.allocator) -> string {
@@ -343,7 +352,7 @@ open :: proc(state: ^Preview, rect: Rect) -> bool {
 	path := strings.clone_to_cstring(state.fifo_path, context.temp_allocator)
 	if posix.mkfifo(path, {.IRUSR, .IWUSR}) != .OK do return false
 
-	script := fmt.aprintf(READER, state.fifo_path, allocator = context.temp_allocator)
+	script := strings.concatenate({READER_HEAD, state.fifo_path, READER_TAIL}, context.temp_allocator)
 	if os.write_entire_file(state.script_path, transmute([]byte)script) != nil do return false
 
 	// Read-write so the open does not block waiting for a reader, and so the reader

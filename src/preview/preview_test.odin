@@ -1,6 +1,7 @@
 package preview
 
 import "core:fmt"
+import "core:strings"
 import "core:testing"
 
 // hexe answers in the family's shape: a *list* of return values under `result`, with
@@ -175,4 +176,19 @@ test_the_pane_record_carries_its_own_name :: proc(t: ^testing.T) {
 	answer := parse_self(`{"ok":true,"n":1,"result":[{"is_float":true,"uuid":"abc123","pos_x_pct":50,"width_pct":30}]}`)
 	testing.expect(t, answer.known)
 	testing.expect_value(t, answer.uuid, "abc123")
+}
+
+// The reader script is joined, never formatted. `fmt.aprintf` reads `{` as the start
+// of a verb, so a shell `{ ...; }` group put through it came out as
+// `%!(MISSING CLOSE BRACE)` -- a script `sh` refused, in a float that closed the
+// instant it opened, which the float CLI reports as a clean exit 0. Nothing about that
+// chain says "syntax error", so the shape is pinned here instead.
+@(test)
+test_the_reader_script_is_shell_a_shell_would_accept :: proc(t: ^testing.T) {
+	script := strings.concatenate({READER_HEAD, "/run/user/1000/trek/preview-1.fifo", READER_TAIL}, context.temp_allocator)
+	testing.expect(t, !strings.contains(script, "MISSING"), "the script went through a formatter")
+	testing.expect(t, !strings.contains(script, "%!"), "the script went through a formatter")
+	// Every group the reader opens is closed, and the fifo landed in the redirect.
+	testing.expect_value(t, strings.count(script, "{"), strings.count(script, "}"))
+	testing.expect(t, strings.contains(script, `done < "/run/user/1000/trek/preview-1.fifo"`))
 }
