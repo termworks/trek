@@ -8,6 +8,7 @@ import "core:path/filepath"
 import "core:slice"
 import "core:strings"
 import "core:sync"
+import tui "../tui"
 import clua "vendor:lua/5.4"
 
 NODES_SOURCE :: #load("../../lua/trek/nodes.lua")
@@ -17,8 +18,8 @@ DEFAULT_SOURCE :: #load("../../lua/trek/default.lua")
 Settings :: struct {
 	hidden:          bool,
 	start_tab:       string,
-	width:           int,
-	height:          int,
+	width:           tui.Extent,
+	height:          tui.Extent,
 	align:           string,
 	border:          bool,
 }

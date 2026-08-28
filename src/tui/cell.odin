@@ -282,3 +282,45 @@ draw_frame :: proc(buffer: ^Buffer, rect: Rect, style: Style) {
 	buffer_set(buffer, rect.x, bottom, Cell{rune = '╰', style = style})
 	buffer_set(buffer, right, bottom, Cell{rune = '╯', style = style})
 }
+
+// A viewport dimension, as the user said it: a count of cells, or a share of the
+// terminal.
+//
+// Cells are exact and stop meaning what you chose the moment the window is a
+// different size, which is the whole reason for the second form -- "half the screen"
+// survives a resize where "60 columns" only survives a screen wide enough for it.
+Extent :: struct {
+	value:   int,
+	percent: bool,
+}
+
+// `"60"` is cells, `"50%"` is a share. Zero means "unset", which viewport_rect reads
+// as filling the terminal.
+extent_parse :: proc(text: string) -> (Extent, bool) {
+	if text == "" do return {}, false
+	body := text
+	percent := false
+	if body[len(body) - 1] == '%' {
+		percent = true
+		body = body[:len(body) - 1]
+		if body == "" do return {}, false
+	}
+	number := 0
+	for character in body {
+		if character < '0' || character > '9' do return {}, false
+		number = number * 10 + int(character - '0')
+		if number > 100000 do return {}, false
+	}
+	// A share over the whole is a typo rather than an intention, and silently clamping
+	// it would hide the typo behind a window that looks almost right.
+	if percent && number > 100 do return {}, false
+	return Extent{value = number, percent = percent}, true
+}
+
+// The dimension in cells, against a terminal of `total`. A share always keeps at least
+// one cell: rounding a small window down to nothing would draw no trek at all.
+extent_cells :: proc(extent: Extent, total: int) -> int {
+	if extent.value <= 0 do return 0
+	if !extent.percent do return extent.value
+	return max(total * extent.value / 100, 1)
+}

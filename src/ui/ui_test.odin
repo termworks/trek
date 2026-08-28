@@ -358,3 +358,24 @@ test_a_tab_that_answered_late_still_appears :: proc(t: ^testing.T) {
 	testing.expect_value(t, probe.asked, 1)
 	testing.expect_value(t, shell_visible_count(&shell), 2)
 }
+
+// Launching with nothing under the cursor means the first arrow key is spent selecting
+// rather than moving -- and in explorer mode, where the selection is what you act on,
+// there is nothing to act on at all until you press one.
+@(test)
+test_launch_lands_the_cursor_on_a_row :: proc(t: ^testing.T) {
+	shell: Shell
+	shell_init(&shell)
+	defer shell_destroy(&shell)
+	shell_add_tab(&shell, fake_tab("tree"))
+	shell_reload(&shell)
+	testing.expect_value(t, shell.selected, -1)
+
+	shell_apply_selection(&shell, tabpkg.Tab_Result{select_id = "row-3", select_first = true})
+	testing.expect_value(t, shell.selected, 3)
+
+	// A file that is not in this directory still has to leave the cursor somewhere.
+	shell_reload(&shell)
+	shell_apply_selection(&shell, tabpkg.Tab_Result{select_id = "/elsewhere/gone.txt", select_first = true})
+	testing.expect_value(t, shell.selected, 0)
+}

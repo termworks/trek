@@ -39,13 +39,23 @@ make test --package lua --names lua.test_lua_exec_is_a_cached_poll --threads 1
 ## Usage
 
 ```sh
-trek [path] [options]
+trek [path or file] [options]
+```
+
+The argument says where to start **and**, optionally, what to start on. A directory
+opens there with the cursor on its first row; a **file** opens the directory around it
+with the cursor on that file. One argument rather than two, because an editor asking for
+a sidebar has the file in hand, not the directory:
+
+```sh
+trek src/main.odin        # opens src/, cursor on main.odin
 ```
 
 | option | |
 |---|---|
 | `-e`, `--explore` | start in explorer mode |
 | `--cwd-file PATH` | write the directory trek finished in to `PATH` |
+| `--width N`, `--height N` | cells, or a share of the terminal: `--width 50%` |
 | `-h`, `--help` | show help |
 | `-V`, `--version` | show the version |
 
@@ -100,8 +110,8 @@ trek --width 40 --align bottom-right         # a corner panel, full height
 
 | setting | |
 |---|---|
-| `--width N` / `trek.width` | viewport columns; `0` or absent fills the terminal |
-| `--height N` / `trek.height` | viewport rows |
+| `--width N` / `trek.width` | viewport columns, or a share: `50%` / `"50%"`. `0` or absent fills the terminal |
+| `--height N` / `trek.height` | viewport rows, or a share: `80%` / `"80%"` |
 | `--align WHERE` / `trek.align` | `center` (default), `top-left`, `top-right`, `bottom-left`, `bottom-right` |
 | `trek.border` | frame the box when it does not fill the terminal (default `true`) |
 
@@ -265,6 +275,44 @@ A plugin that raises is **reported in the footer and skipped**; the ones after i
 still load. That is deliberately unlike `init.lua`, where a raise is fatal: your own
 file failing means carrying on would silently apply settings you did not ask for,
 while a third-party plugin failing must not take the tool down with it.
+
+## Previewing, when hexe is drawing
+
+Press `p` and the selected row appears in a second float beside this one: `bat` for a
+file, `eza` for a directory, following the cursor as it moves. Press it again to close.
+
+trek does not draw any of that. It knows *what is selected*; hexe knows how to put a
+pane beside another one — so trek hands over a path and hexe renders it, and trek never
+learns what `bat` or `eza` are. Outside hexe the key answers `preview needs hexe` and
+nothing else in trek changes.
+
+```
+p ──► a float opens hard right, trek moves hard left
+      cursor moves ──► the path goes down a fifo ──► bat/eza redraws
+      q or p       ──► the fifo closes, the float ends
+```
+
+The order is not incidental. Opening a float puts every *other* float back at the
+position it was declared with, so an explorer that stepped aside first would be moved
+back underneath the preview. It opens first and trek moves second, and trek then asks
+hexe where it actually ended up: if the move did not take, there is no preview rather
+than one covering the thing it describes.
+
+The two are anchored to opposite edges with their widths adding to the window, so they
+are adjacent by construction. `x` in hexe is an anchor in the space a float does not
+fill — 0 flush left, 100 flush right — not a centre and not a left edge; reading it as
+a centre is how a pair that computes as adjacent lands twenty-four columns on top of
+itself.
+
+The channel is a fifo trek holds open for writing, and that choice does the cleanup:
+the reader sees EOF the moment trek's descriptor closes, so the preview dies with trek
+whether trek exited or crashed. There is no float to orphan and no pid to remember. The
+descriptor is opened `O_CLOEXEC` for the same reason — without it the float trek spawns
+inherits it, becomes a writer itself, and the reader waits on a pipe that can never end.
+
+Stepping aside uses hexe's `geometry` on trek's own pane socket, which costs `read`
+there because the selector cannot reach past the caller. An older hexe refuses that
+verb by name; the preview still opens, beside a float that did not move.
 
 ## Answering other programs
 

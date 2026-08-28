@@ -393,3 +393,42 @@ test_wrap_spans_never_splits_atomic :: proc(t: ^testing.T) {
 	}
 	testing.expect_value(t, found, 1)
 }
+
+// A size is either a count of cells or a share of the terminal. The share is the form
+// that survives a resize, which is why it exists at all.
+@(test)
+test_a_size_is_cells_or_a_share :: proc(t: ^testing.T) {
+	cells, ok := extent_parse("60")
+	testing.expect(t, ok)
+	testing.expect_value(t, cells.value, 60)
+	testing.expect(t, !cells.percent)
+	testing.expect_value(t, extent_cells(cells, 200), 60)
+
+	share, share_ok := extent_parse("50%")
+	testing.expect(t, share_ok)
+	testing.expect(t, share.percent)
+	testing.expect_value(t, extent_cells(share, 200), 100)
+	// The same share against a different terminal is a different number of cells, which
+	// is the whole point.
+	testing.expect_value(t, extent_cells(share, 80), 40)
+}
+
+@(test)
+test_a_share_never_rounds_away_to_nothing :: proc(t: ^testing.T) {
+	share, _ := extent_parse("1%")
+	// 1% of 40 is 0 in integer arithmetic, and a viewport of zero draws no trek at all.
+	testing.expect_value(t, extent_cells(share, 40), 1)
+	// Unset stays unset: viewport_rect reads zero as "fill the terminal".
+	testing.expect_value(t, extent_cells(Extent{}, 200), 0)
+}
+
+@(test)
+test_a_size_that_is_not_one_is_refused :: proc(t: ^testing.T) {
+	// A share over the whole is a typo. Clamping it would hide the typo behind a
+	// window that looks almost right.
+	bad := [?]string{"", "%", "-10", "60px", "50 %", "abc", "101%", "1e3"}
+	for text in bad {
+		_, ok := extent_parse(text)
+		testing.expectf(t, !ok, "accepted %q as a size", text)
+	}
+}

@@ -32,11 +32,27 @@ engine_read_settings :: proc(engine: ^Engine, trek_index: c.int) {
 	delete(engine.settings.start_tab)
 	engine.settings.hidden = table_bool(engine.state, trek_index, "hidden", false)
 	engine.settings.start_tab = table_string(engine.state, trek_index, "start_tab", engine.allocator)
-	engine.settings.width = table_int(engine.state, trek_index, "width", 0)
-	engine.settings.height = table_int(engine.state, trek_index, "height", 0)
+	engine.settings.width = table_extent(engine.state, trek_index, "width")
+	engine.settings.height = table_extent(engine.state, trek_index, "height")
 	delete(engine.settings.align)
 	engine.settings.align = table_string(engine.state, trek_index, "align", engine.allocator)
 	engine.settings.border = table_bool(engine.state, trek_index, "border", true)
+}
+
+// A size the config gave as a number is cells; as a string it may carry a `%`. Both
+// forms are read here so `trek.width = "50%"` and `trek.width = 60` mean what they
+// look like, and a string that is neither is ignored rather than silently taken as
+// zero -- which would read as "fill the terminal", the opposite of what was asked.
+table_extent :: proc(L: ^clua.State, table: c.int, field: cstring) -> tui.Extent {
+	clua.getfield(L, table, field)
+	defer clua.pop(L, 1)
+	if clua.type(L, -1) == .STRING {
+		text := lua_string(L, -1, context.temp_allocator)
+		if extent, ok := tui.extent_parse(text); ok do return extent
+		return {}
+	}
+	if clua.isnumber(L, -1) do return tui.Extent{value = int(clua.tointeger(L, -1))}
+	return {}
 }
 
 engine_read_tabs :: proc(engine: ^Engine, trek_index: c.int) {

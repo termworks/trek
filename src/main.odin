@@ -11,17 +11,20 @@ import settings "./settings"
 import tabs "./tabs"
 import tui "./tui"
 import live "./live"
+import preview "./preview"
 import ui "./ui"
 
-VERSION :: "0.1.3"
+VERSION :: "0.1.4"
 
 Options :: struct {
 	root:      string,
 	cwd_file:  string,
+	// A file given as the path: the row to land on once its directory is open.
+	reveal:    string,
 	explore:   bool,
 	serve:     bool,
-	width:     int,
-	height:    int,
+	width:     tui.Extent,
+	height:    tui.Extent,
 	align:     string,
 	help:      bool,
 	version:   bool,
@@ -57,13 +60,13 @@ parse_options :: proc(args: []string, default_root: string) -> Options {
 				options.align = value
 				break
 			}
-			number, parsed := strconv.parse_int(value)
-			if !parsed || number < 0 {
-				options.error = "size must be a positive number"
+			extent, parsed := tui.extent_parse(value)
+			if !parsed {
+				options.error = "size must be a number of cells or a percentage, like 60 or 50%"
 			} else if arg == "--width" {
-				options.width = number
+				options.width = extent
 			} else {
-				options.height = number
+				options.height = extent
 			}
 		case "--cwd-file":
 			// Where trek reports the directory it finished in. A child process cannot
@@ -93,15 +96,17 @@ usage :: proc() {
 	fmt.println("trek")
 	fmt.println("")
 	fmt.println("Usage:")
-	fmt.println("  trek [path] [options]")
+	fmt.println("  trek [path or file] [options]")
+	fmt.println("")
+	fmt.println("  A directory opens there. A file opens its directory with that file selected.")
 	fmt.println("")
 	fmt.println("Options:")
 	fmt.println("  -e, --explore        start in explorer mode (walk into directories)")
 	fmt.println("      --serve          bind a control socket other programs can query")
 	fmt.println("      --lua-api        print the client library, then exit")
 	fmt.println("      --cwd-file PATH  write the directory trek finished in to PATH")
-	fmt.println("      --width N        viewport columns (default: the terminal)")
-	fmt.println("      --height N       viewport rows (default: the terminal)")
+	fmt.println("      --width N|N%     viewport columns, or a share of the terminal")
+	fmt.println("      --height N|N%    viewport rows, or a share of the terminal")
 	fmt.println("      --align WHERE    center, top-left, top-right, bottom-left, bottom-right")
 	fmt.println("  -h, --help           show this help")
 	fmt.println("  -V, --version        show the version")
@@ -109,6 +114,7 @@ usage :: proc() {
 	fmt.println("Keys:")
 	fmt.println("  ↑↓ move   Enter open   ← parent/collapse   a explorer mode")
 	fmt.println("  . hidden  r refresh    m menu   1-9 tabs    q quit")
+	fmt.println("  p preview the selected row in a second float (inside hexe)")
 }
 
 run_suspended :: proc(config: ^luaconfig.Engine, terminal: ^tui.Terminal, buffer: ^tui.Buffer) -> bool {
@@ -190,6 +196,11 @@ run_tui :: proc(root: string, options: Options) -> bool {
 	ui.shell_add_tab(&shell, tabs.graph_tab(root))
 	for &definition in config.tabs do ui.shell_add_tab(&shell, tabs.lua_tab(&config, &definition))
 	_ = ui.shell_switch_named(&shell, config.settings.start_tab)
+	// Launch with something under the cursor. Without this the first arrow key is spent
+	// selecting rather than moving, and in explorer mode -- where the selection IS what you
+	// act on -- there is nothing to act on until you press one. A file given as the path
+	// lands the cursor on it; anything else lands on the first row.
+	ui.shell_apply_selection(&shell, tabs.Tab_Result{select_id = options.reveal, select_first = true})
 	if config.plugin_error != "" do ui.shell_set_footer(&shell, config.plugin_error)
 	if message := luaconfig.engine_emit(&config, "root", root); message != "" {
 		ui.shell_set_footer(&shell, message)
@@ -197,8 +208,8 @@ run_tui :: proc(root: string, options: Options) -> bool {
 	}
 
 	// CLI overrides config, and config overrides filling the terminal.
-	width_setting := options.width if options.width > 0 else config.settings.width
-	height_setting := options.height if options.height > 0 else config.settings.height
+	width_setting := options.width if options.width.value > 0 else config.settings.width
+	height_setting := options.height if options.height.value > 0 else config.settings.height
 	align_name := options.align if options.align != "" else config.settings.align
 	align_setting, _ := tui.align_parse(align_name)
 	border_setting := config.settings.border
@@ -212,6 +223,12 @@ run_tui :: proc(root: string, options: Options) -> bool {
 
 	// Opt-in: a run nobody asks about has no socket at all, which is what makes the
 	// feature safe to leave available by default.
+	// The preview is hexe's to draw. Inert everywhere else, and nothing below has to
+	// ask whether we are inside hexe.
+	viewer: preview.Preview
+	preview.init(&viewer)
+	defer preview.destroy(&viewer)
+
 	server: live.Server
 	if options.serve {
 		if path, ok := live.serve(&server); ok {
@@ -232,6 +249,9 @@ run_tui :: proc(root: string, options: Options) -> bool {
 			ui.shell_reload(&shell)
 		}
 		live_state := live_snapshot(&shell)
+		// The same snapshot the socket answers from, so the preview follows exactly
+		// what a peer would be told is selected.
+		preview.follow(&viewer, live_state.selection)
 		live.notice(&server, &watch, live_state)
 		live.poll(&server, live_state)
 		if tui.terminal_take_resize() {
@@ -239,7 +259,13 @@ run_tui :: proc(root: string, options: Options) -> bool {
 				tui.buffer_resize(&buffer, new_width, new_height)
 			}
 		}
-		view = tui.viewport_rect(buffer.width, buffer.height, width_setting, height_setting, align_setting)
+		view = tui.viewport_rect(
+			buffer.width,
+			buffer.height,
+			tui.extent_cells(width_setting, buffer.width),
+			tui.extent_cells(height_setting, buffer.height),
+			align_setting,
+		)
 		inner := view
 		framed := border_setting && (view.width < buffer.width || view.height < buffer.height)
 		if framed {
@@ -277,6 +303,13 @@ run_tui :: proc(root: string, options: Options) -> bool {
 					is_dir = row.is_dir
 				}
 				handled, message := luaconfig.engine_handle_key(&config, tab_name, event.key, row_path, is_dir)
+				// `p` is trek's, not a tab's: the preview is about the selected row
+				// whichever list produced it. A config that binds `p` still wins, so
+				// this is asked after Lua and before the shell.
+				if !handled && event.key.code == .Rune && event.key.rune == 'p' {
+					ui.shell_set_footer(&shell, preview.toggle(&viewer))
+					handled = true
+				}
 				if handled {
 					if message != "" {
 						ui.shell_set_footer(&shell, message)
@@ -325,19 +358,26 @@ main :: proc() {
 		fmt.eprintln("trek:", options.error)
 		os.exit(2)
 	}
-	root, path_err := filepath.abs(options.root, context.allocator)
+	target, path_err := filepath.abs(options.root, context.allocator)
 	if path_err != nil {
-		fmt.eprintln("trek: invalid root path")
+		// abs() resolves through the filesystem, so a path that is not there fails here
+		// rather than at the stat below. Name it either way.
+		fmt.eprintln("trek:", options.root, "does not exist")
 		os.exit(1)
 	}
-	defer delete(root)
-	info, stat_err := os.stat(root, context.allocator)
-	if stat_err != nil || info.type != .Directory {
-		if stat_err == nil do os.file_info_delete(info, context.allocator)
-		fmt.eprintln("trek: root is not a directory")
+	defer delete(target)
+	info, stat_err := os.stat(target, context.allocator)
+	if stat_err != nil {
+		fmt.eprintln("trek:", options.root, "does not exist")
 		os.exit(1)
 	}
+	is_directory := info.type == .Directory
 	os.file_info_delete(info, context.allocator)
+
+		root, reveal := launch_target(target, is_directory)
+	defer delete(root)
+	defer delete(reveal)
+	options.reveal = reveal
 	if !run_tui(root, options) do os.exit(1)
 }
 
@@ -360,4 +400,14 @@ live_snapshot :: proc(shell: ^ui.Shell) -> live.Snapshot {
 	}
 	snapshot.tabs = names[:]
 	return snapshot
+}
+
+// Where a path argument points: the directory to open, and the row to land on inside it.
+//
+// A file names both halves of the same request, which is why there is no second flag for
+// it: "open here" and "open here, on this" differ only by a detail, and an editor asking
+// for a sidebar has the file in hand, not the directory.
+launch_target :: proc(path: string, is_directory: bool, allocator := context.allocator) -> (root, reveal: string) {
+	if is_directory do return strings.clone(path, allocator), ""
+	return filepath.dir(path, allocator), strings.clone(path, allocator)
 }
