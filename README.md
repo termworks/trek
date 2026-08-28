@@ -24,10 +24,12 @@ make test
 make smoke
 make verify
 make run
+make configs
 ```
 
 `make build` produces `target/trek` and rejects a dynamically linked artifact.
 `make smoke` keeps that binary open in a PTY until delayed input arrives.
+`make configs` installs `config/` into `$XDG_CONFIG_HOME/trek`.
 
 Focused tests can be selected without bypassing the project recipes:
 
@@ -260,8 +262,17 @@ trek.tab("todo", {
 })
 ```
 
-A worked example ships in `examples/plugins/tags.lua`: the repository's latest
-tags, in a tab that is there only inside a repository.
+This repository ships the config it is developed against, in `config/`:
+
+```sh
+make configs            # config/ -> $XDG_CONFIG_HOME/trek
+make configs --dest DIR # somewhere else
+```
+
+`config/init.lua` is the settings and keys; `config/plugins/tags.lua` is a worked
+plugin — the repository's latest tags, in a tab that is there only inside a repository.
+Each entry is mirrored on its own, so anything else you keep in that directory is left
+where it is.
 
 Nothing has to be required or merged by hand — the host does the discovery, so a
 config that wants somebody else's tab does not grow shape-checking for it.
