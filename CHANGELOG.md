@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.1.5] - 2026-08-29
+
+### <!-- 0 -->⛰️  Features
+
+- Plugin list, and a share/ like its siblings
+- Shrink the explorer and hold the cursor
+
+### <!-- 1 -->🐛 Bug Fixes
+
+- Build the reader script without a formatter
+
+### <!-- 2 -->🚜 Refactor
+
+- [**breaking**] A runtimepath, the way neovim does it
+
+### <!-- 7 -->⚙️ Miscellaneous Tasks
+
+- Install the config with the binary
+- Ship the config this repo is built against
+
 ## [0.1.4] - 2026-08-28
 
 ### <!-- 0 -->⛰️  Features
