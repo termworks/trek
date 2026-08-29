@@ -14,13 +14,15 @@ import live "./live"
 import preview "./preview"
 import ui "./ui"
 
-VERSION :: "0.1.4"
+VERSION :: "0.1.5"
 
 Options :: struct {
 	root:      string,
 	cwd_file:  string,
 	// A file given as the path: the row to land on once its directory is open.
 	reveal:    string,
+	// Percent of its width the explorer gives up while a preview is beside it.
+	shrink:    int,
 	explore:   bool,
 	serve:     bool,
 	width:     tui.Extent,
@@ -30,6 +32,51 @@ Options :: struct {
 	version:   bool,
 	printed:   bool,
 	error:     string,
+}
+
+
+// `trek plugin list` — the path, and what would run from it.
+//
+// The same words hexe and oslo answer to, because the question is the same one: *is it me or a
+// plugin, and in what order did they run?* Both halves matter — a plugin that is not running is
+// usually in a directory that is not on the path, and one behaving oddly is usually one that another
+// plugin ran before.
+//
+// Guarded on a directory of that name existing, because trek's own argument is a path: somebody with
+// a directory called `plugin` still opens it by typing `trek plugin`, which is trek's actual job.
+plugin_subcommand :: proc(args: []string) -> bool {
+	if len(args) == 0 || args[0] != "plugin" do return false
+	if len(args) > 1 && args[1] != "list" do return false
+	if len(args) > 2 do return false
+	if info, err := os.stat("plugin", context.temp_allocator); err == nil && info.type == .Directory {
+		return false
+	}
+
+	roots := luaconfig.roots(context.temp_allocator)
+	fmt.println("runtimepath")
+	for root in roots {
+		// Saying which of them exist turns "my plugin does not load" into one look: the directory
+		// it is in is usually not on the path at all.
+		there := " "
+		if info, err := os.stat(root.path, context.temp_allocator); err == nil && info.type == .Directory {
+			there = " "
+		} else {
+			there = "-"
+		}
+		fmt.printfln("  %s %s", there, root.path)
+	}
+
+	files := luaconfig.plugin_files(roots, context.temp_allocator)
+	fmt.println("")
+	fmt.println("plugins, in load order")
+	if len(files) == 0 do fmt.println("    none")
+	for file, index in files {
+		fmt.printfln("  % 3d. %s", index + 1, file.path)
+	}
+	fmt.println("")
+	fmt.println("  a `-` marks a directory that is not there; nothing else is needed to install a")
+	fmt.println("  plugin than putting it on this path. `--noplugin` skips them all.")
+	return true
 }
 
 parse_options :: proc(args: []string, default_root: string) -> Options {
@@ -44,6 +91,8 @@ parse_options :: proc(args: []string, default_root: string) -> Options {
 		case "-V", "--version": options.version = true
 		case "-e", "--explore": options.explore = true
 		case "--serve": options.serve = true
+		// The first question when something misbehaves is "is it me or a plugin?".
+		case "--noplugin": luaconfig.set_plugins_enabled(false)
 		case "--lua-api":
 			// The client library on stdout, for a host that can shell out. One that
 			// cannot asks the running trek for it instead, through the `client` verb.
@@ -67,6 +116,18 @@ parse_options :: proc(args: []string, default_root: string) -> Options {
 				options.width = extent
 			} else {
 				options.height = extent
+			}
+		case "--preview-shrink":
+			if index >= len(args) {
+				options.error = "option needs a value"
+				break
+			}
+			number, parsed := strconv.parse_int(args[index])
+			index += 1
+			if !parsed || number < 0 || number > 99 {
+				options.error = "--preview-shrink takes a percentage between 0 and 99"
+			} else {
+				options.shrink = number
 			}
 		case "--cwd-file":
 			// Where trek reports the directory it finished in. A child process cannot
@@ -104,7 +165,12 @@ usage :: proc() {
 	fmt.println("  -e, --explore        start in explorer mode (walk into directories)")
 	fmt.println("      --serve          bind a control socket other programs can query")
 	fmt.println("      --lua-api        print the client library, then exit")
+	fmt.println("      --noplugin       start without running any plugin")
+	fmt.println("")
+	fmt.println("Commands:")
+	fmt.println("  plugin list          the runtimepath, and the plugins on it, in load order")
 	fmt.println("      --cwd-file PATH  write the directory trek finished in to PATH")
+	fmt.println("      --preview-shrink N  percent of its width the explorer gives up to a preview")
 	fmt.println("      --width N|N%     viewport columns, or a share of the terminal")
 	fmt.println("      --height N|N%    viewport rows, or a share of the terminal")
 	fmt.println("      --align WHERE    center, top-left, top-right, bottom-left, bottom-right")
@@ -227,6 +293,7 @@ run_tui :: proc(root: string, options: Options) -> bool {
 	// ask whether we are inside hexe.
 	viewer: preview.Preview
 	preview.init(&viewer)
+	viewer.shrink = options.shrink if options.shrink > 0 else config.settings.preview_shrink
 	defer preview.destroy(&viewer)
 
 	server: live.Server
@@ -252,6 +319,9 @@ run_tui :: proc(root: string, options: Options) -> bool {
 		// The same snapshot the socket answers from, so the preview follows exactly
 		// what a peer would be told is selected.
 		preview.follow(&viewer, live_state.selection)
+		// Scrolling the preview moves hexe's focus there; without this the arrow keys
+		// would be scrolling a file instead of choosing one.
+		preview.keep_focus(&viewer)
 		live.notice(&server, &watch, live_state)
 		live.poll(&server, live_state)
 		if tui.terminal_take_resize() {
@@ -344,6 +414,8 @@ main :: proc() {
 		os.exit(1)
 	}
 	defer delete(cwd)
+	// Before the flags, because it answers and exits rather than opening anything.
+	if plugin_subcommand(os.args[1:]) do return
 	options := parse_options(os.args[1:], cwd)
 	if options.help {
 		usage()

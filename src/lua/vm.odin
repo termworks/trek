@@ -22,6 +22,7 @@ Settings :: struct {
 	height:          tui.Extent,
 	align:           string,
 	border:          bool,
+	preview_shrink:  int,
 }
 
 Tab_Def :: struct {
@@ -89,6 +90,36 @@ run_source :: proc(engine: ^Engine, source, name: string) -> bool {
 	return true
 }
 
+
+// Like `run_source`, but the chunk is called with one argument: `local root = ...`.
+run_source_with_arg :: proc(engine: ^Engine, source, name, arg: string) -> bool {
+	c_name := strings.clone_to_cstring(name, context.temp_allocator)
+	if clua.L_loadbuffer(engine.state, raw_data(source), c.size_t(len(source)), c_name) != .OK {
+		stack_error(engine, name)
+		return false
+	}
+	push_string(engine.state, arg)
+	if clua.pcall(engine.state, 1, 0, 0) != 0 {
+		stack_error(engine, name)
+		return false
+	}
+	return true
+}
+
+// Put every root's `lua/` on `package.path`, so a plugin's own helper is requireable wherever
+// the plugin lives. trek's own modules arrive through `package.preload`, so this only ever
+// adds; nothing that resolved before stops resolving.
+engine_set_require_path :: proc(engine: ^Engine) {
+	list := roots(context.temp_allocator)
+	path := require_path(list, context.temp_allocator)
+	clua.getglobal(engine.state, "package")
+	if clua.istable(engine.state, -1) {
+		push_string(engine.state, path)
+		clua.setfield(engine.state, -2, "path")
+	}
+	clua.pop(engine.state, 1)
+}
+
 config_path :: proc(allocator := context.allocator) -> (string, bool) {
 	explicit := os.get_env("TREK_C", context.temp_allocator)
 	if explicit != "" do return strings.clone(explicit, allocator), true
@@ -101,53 +132,62 @@ config_path :: proc(allocator := context.allocator) -> (string, bool) {
 	return path, false
 }
 
-// The directory of discovered fragments, beside init.lua. A plugin registers itself and
-// returns nothing, so a config never has to require, shape-check and merge a returned
-// table by hand -- the merge exists once, here, rather than in every config that wants
-// somebody else's tab.
-plugins_dir :: proc(allocator := context.allocator) -> string {
-	explicit := os.get_env("TREK_C", context.temp_allocator)
-	if explicit != "" {
-		return filepath.join([]string{filepath.dir(explicit, context.temp_allocator), "plugins"}, allocator) or_else ""
-	}
-	config_home := os.get_env("XDG_CONFIG_HOME", context.temp_allocator)
-	if config_home == "" {
-		home := os.get_env("HOME", context.temp_allocator)
-		config_home, _ = filepath.join([]string{home, ".config"}, context.temp_allocator)
-	}
-	path, _ := filepath.join([]string{config_home, "trek", "plugins"}, allocator)
-	return path
-}
 
-// Run every plugin, in name order so the result does not depend on the filesystem.
+
+
+
+// Run every plugin on the runtimepath.
 //
 // A raise here is reported and the rest still load. That is deliberately unlike init.lua,
 // where a raise is fatal: init.lua is the user's own file and carrying on would silently
-// apply settings they did not ask for, while a plugin is somebody else's code and one bad
-// one must not take the tool down with it.
+// apply settings they did not ask for, while a plugin is one of several and one bad one
+// must not take the tool down with it.
+//
+// Nothing is asked and nothing is approved. What is on the path runs, because somebody put
+// it there -- a prompt would only ask them to confirm a decision they already made by
+// copying the directory in.
 engine_load_plugins :: proc(engine: ^Engine) -> string {
-	dir := plugins_dir(context.temp_allocator)
-	infos, err := os.read_all_directory_by_path(dir, context.temp_allocator)
-	if err != nil do return ""
-	names := make([dynamic]string, context.temp_allocator)
-	for info in infos {
-		if info.type == .Directory do continue
-		if !strings.has_suffix(info.name, ".lua") do continue
-		append(&names, info.name)
-	}
-	slice.sort(names[:])
+	if !plugins_enabled() do return ""
+	list := roots(context.temp_allocator)
+	files := plugin_files(list, context.temp_allocator)
 	first_error := ""
-	for name in names {
-		path, _ := filepath.join([]string{dir, name}, context.temp_allocator)
-		contents, read_error := os.read_entire_file(path, context.temp_allocator)
+	for file in files {
+		contents, read_error := os.read_entire_file(file.path, context.temp_allocator)
 		if read_error != nil do continue
-		if !run_source(engine, string(contents), path) {
+		// Its root, as the chunk's `...` -- Lua's own way of telling a chunk where it lives.
+		// A plugin shipping a script or a data file beside its `plugin/` has no other way to
+		// name it, and hardcoding the install path breaks the moment XDG_DATA_HOME moves.
+		if !run_source_with_arg(engine, string(contents), file.path, file.root) {
 			if first_error == "" do first_error = strings.clone(engine.error, engine.allocator)
 			delete(engine.error)
 			engine.error = ""
 		}
 	}
-	return first_error
+	notice := legacy_plugins_notice(engine)
+	if notice == "" do return first_error
+	if first_error == "" do return notice
+	// Both, joined: a plugin that failed must not hide the reason the others are missing.
+	joined := fmt.aprintf("%s; %s", first_error, notice, allocator = engine.allocator)
+	delete(first_error)
+	delete(notice)
+	return joined
+}
+
+// `~/.config/trek/plugins/` was where every plugin lived before the runtimepath. Nothing
+// reads it now, so an upgrade would otherwise make somebody's plugins quietly stop
+// loading -- which reads as "trek broke", and sends them debugging the plugin.
+//
+// Said rather than supported: loading it too would be a second mechanism for one idea,
+// which is exactly what this convention exists to prevent.
+legacy_plugins_notice :: proc(engine: ^Engine) -> string {
+	dir, _ := filepath.join([]string{config_home(context.temp_allocator), "plugins"}, context.temp_allocator)
+	info, err := os.stat(dir, context.temp_allocator)
+	if err != nil || info.type != .Directory do return ""
+	return fmt.aprintf(
+		"%s is no longer read: move its files to plugin/ (singular)",
+		dir,
+		allocator = engine.allocator,
+	)
 }
 state_dir :: proc(allocator := context.allocator) -> string {
 	state_home := os.get_env("XDG_STATE_HOME", context.temp_allocator)
@@ -174,6 +214,7 @@ engine_init :: proc(engine: ^Engine, root: string, allocator := context.allocato
 	}
 	clua.L_openlibs(engine.state)
 	engine_register_host(engine)
+	engine_set_require_path(engine)
 	if !run_source(engine, string(NODES_SOURCE), "@trek/nodes.lua") do return false
 	if !run_source(engine, string(INIT_SOURCE), "@trek/init.lua") do return false
 	if !run_source(engine, string(DEFAULT_SOURCE), "@trek/default.lua") do return false
@@ -199,11 +240,12 @@ engine_load_config :: proc(engine: ^Engine) -> bool {
 		engine.error = fmt.aprintf("%s: could not read config", path, allocator = engine.allocator)
 		return false
 	}
-	// Plugins load BEFORE init.lua so the config wins. A keyed registrar takes the last
-	// write, so whichever runs later overrides -- and the user's own file overriding
-	// somebody else's plugin is the only order that makes a preset overridable.
-	engine.plugin_error = engine_load_plugins(engine)
+	// Plugins load AFTER init.lua, as they do in neovim: your file sets things up, then the
+	// plugins on the path run. A user who wants the last word puts it in
+	// `~/.config/trek/after/plugin/`, which is the whole reason that directory exists --
+	// and unlike "the config always wins", it works between two plugins as well.
 	if !run_source(engine, string(contents), path) do return false
+	engine.plugin_error = engine_load_plugins(engine)
 	return engine_read_api(engine)
 }
 

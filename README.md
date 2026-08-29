@@ -24,10 +24,14 @@ make test
 make smoke
 make verify
 make run
+make configs
 ```
 
 `make build` produces `target/trek` and rejects a dynamically linked artifact.
 `make smoke` keeps that binary open in a PTY until delayed input arrives.
+`make configs` installs `config/` into `$XDG_CONFIG_HOME/trek`, and `make install`
+ends with it — a binary newer than the config it reads is how a new setting silently
+does nothing.
 
 Focused tests can be selected without bypassing the project recipes:
 
@@ -246,11 +250,32 @@ looking at disappears, trek falls back to the first one still in the bar.
 
 ### Plugins
 
-A file in `~/.config/trek/plugins/*.lua` is discovered and run automatically. It
-registers what it wants and returns nothing, exactly like `init.lua`:
+trek follows **neovim's model**, which is also [hexe's](https://github.com/bresilla/hexe):
+an ordered path of roots, each laid out the same way inside.
+
+```
+~/.config/trek                 yours
+/etc/xdg/trek                  the system's
+~/.local/share/trek/site       where packages install
+  + site/pack/*/start/*        each one, as its own root
+~/.local/share/trek/runtime    trek's own
+.../after                      the same list, reversed
+```
+
+```
+<root>/
+    plugin/**/*.lua   run at startup, alphabetically, subdirectories included
+    lua/              modules for `require`, never run on their own
+    after/plugin/     run after everything else
+```
+
+**`plugin/` runs, `lua/` is required.** A file under `plugin/` is a statement trek runs
+for you; a file under `lua/` does nothing until something requires it, which is where a
+plugin's helpers go. It registers what it wants and returns nothing, exactly like
+`init.lua`:
 
 ```lua
--- ~/.config/trek/plugins/todo.lua
+-- ~/.config/trek/plugin/todo.lua
 local trek = require("trek")
 
 trek.tab("todo", {
@@ -260,8 +285,42 @@ trek.tab("todo", {
 })
 ```
 
-A worked example ships in `examples/plugins/tags.lua`: the repository's latest
-tags, in a tab that is there only inside a repository.
+A plugin is handed its root as `...`, so it can read a file it ships:
+
+```lua
+local root = ...
+local f = io.open(root .. "/data.txt", "r")
+```
+
+**Installing one is putting a directory on the path** — no install command, no manifest,
+no approval. What is there runs, because you put it there.
+
+```sh
+cp -r thing ~/.local/share/trek/site/pack/mine/start/
+```
+
+**`after/plugin/` is the override seam.** Plugins load *after* `init.lua`, as they do in
+neovim, so a line that must win goes in `~/.config/trek/after/plugin/`. That works
+between two plugins as well, which "the config always wins" did not.
+
+`trek plugin list` prints the path and every file that would run, in the order it would run
+them. A `-` marks a root that does not exist yet.
+
+When something misbehaves, `trek --noplugin` starts with none of them — `TREK_NOPLUGIN=1`
+does the same for a whole shell. A plugin that raises is reported and the rest still load,
+deliberately unlike `init.lua`, where a raise is fatal.
+
+This repository ships the config it is developed against, in `config/`:
+
+```sh
+make configs            # config/ -> $XDG_CONFIG_HOME/trek, share/ -> $XDG_DATA_HOME/trek
+make configs --dest DIR # the config somewhere else
+```
+
+`config/init.lua` is the settings and keys; `share/runtime/plugin/tags.lua` is a worked
+plugin — the repository's latest tags, in a tab that is there only inside a repository.
+Each entry is mirrored on its own, so anything else you keep in that directory is left
+where it is.
 
 Nothing has to be required or merged by hand — the host does the discovery, so a
 config that wants somebody else's tab does not grow shape-checking for it.
@@ -280,6 +339,13 @@ while a third-party plugin failing must not take the tool down with it.
 
 Press `p` and the selected row appears in a second float beside this one: `bat` for a
 file, `eza` for a directory, following the cursor as it moves. Press it again to close.
+The explorer gives up a share of its width while the preview is up — `--preview-shrink 40`,
+or `trek.preview_shrink = 40` — because a list of names needs far less room than the file
+beside it.
+
+The cursor stays in the explorer. Scrolling the preview moves hexe's focus there, and from
+that moment the arrow keys would be scrolling a file instead of choosing one, so trek asks
+for the cursor back when it notices something else holding it.
 
 trek does not draw any of that. It knows *what is selected*; hexe knows how to put a
 pane beside another one — so trek hands over a path and hexe renders it, and trek never

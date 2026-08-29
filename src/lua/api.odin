@@ -37,6 +37,7 @@ engine_read_settings :: proc(engine: ^Engine, trek_index: c.int) {
 	delete(engine.settings.align)
 	engine.settings.align = table_string(engine.state, trek_index, "align", engine.allocator)
 	engine.settings.border = table_bool(engine.state, trek_index, "border", true)
+	engine.settings.preview_shrink = table_int(engine.state, trek_index, "preview_shrink", 0)
 }
 
 // A size the config gave as a number is cells; as a string it may carry a `%`. Both

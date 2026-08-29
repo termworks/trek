@@ -135,41 +135,56 @@ end
 
 make.recipe{
   name = "configs",
-  desc = "install config/ into $XDG_CONFIG_HOME/trek",
+  desc = "install config/ and share/ into their XDG directories",
   params = { { "--dest", desc = "somewhere other than the config directory" } },
   run = function(a)
     local top = project_root()
-    local source = top .. "/config"
-    if not oslo.fs.stat(source .. "/") then
+    if not oslo.fs.stat(top .. "/config/") then
       print("no config/ in " .. top .. "; nothing to install")
       return
     end
     assert(oslo.run{ "sh", "-c", "command -v rsync", capture = true }.ok,
            "rsync is not installed; install it first")
 
-    local dest = a.dest
-    if not dest then
-      local config = os.getenv("XDG_CONFIG_HOME")
-      if not config or config == "" then config = os.getenv("HOME") .. "/.config" end
-      dest = config .. "/" .. NAME
+    local function home(var, fallback)
+      local dir = os.getenv(var)
+      if not dir or dir == "" then dir = os.getenv("HOME") .. fallback end
+      return dir .. "/" .. NAME
     end
-    sh.mkdir("-p", dest)
 
-    -- One entry at a time, each mirrored with --delete, rather than one --delete over the whole
-    -- tree: the destination is also where the user keeps their own edits, and a tree-wide mirror
-    -- would take those with it.
-    local synced = 0
-    for _, path in ipairs(oslo.fs.glob(source .. "/*")) do
-      local name = oslo.path.name(path)
-      if oslo.fs.stat(path .. "/") then
-        sh.mkdir("-p", dest .. "/" .. name)
-        sh.rsync("-a", "--delete", path .. "/", dest .. "/" .. name .. "/")
-      else
-        sh.rsync("-a", path, dest .. "/" .. name)
+    -- `shared` names a destination directory that holds THEIR files beside ours -- the data
+    -- directory holds whatever they installed themselves. Mirroring such a directory with
+    -- `--delete` removes every one of those, which is how an install can delete a plugin trek does
+    -- not ship. There, descend and mirror each entry on its own.
+    local function install(source, dest, shared)
+      if not oslo.fs.stat(source .. "/") then return 0 end
+      sh.mkdir("-p", dest)
+      local synced = 0
+      for _, path in ipairs(oslo.fs.glob(source .. "/*")) do
+        local name = oslo.path.name(path)
+        if oslo.fs.stat(path .. "/") then
+          if shared then
+            synced = synced + install(path, dest .. "/" .. name, false)
+            goto continue
+          end
+          sh.mkdir("-p", dest .. "/" .. name)
+          sh.rsync("-a", "--delete", path .. "/", dest .. "/" .. name .. "/")
+        else
+          sh.rsync("-a", path, dest .. "/" .. name)
+        end
+        synced = synced + 1
+        ::continue::
       end
-      synced = synced + 1
+      print(("%d entr%s -> %s"):format(synced, synced == 1 and "y" or "ies", dest))
+      return synced
     end
-    print(("%d entr%s -> %s"):format(synced, synced == 1 and "y" or "ies", dest))
+
+    local dest = a.dest or home("XDG_CONFIG_HOME", "/.config")
+    install(top .. "/config", dest)
+    -- Only when `--dest` was not given: a caller redirecting the config has not asked for the data.
+    if not a.dest then
+      install(top .. "/share", home("XDG_DATA_HOME", "/.local/share"), true)
+    end
   end,
 }
 
@@ -353,12 +368,16 @@ make.alias("c", "compile")
 
 make.recipe{
   name = "install",
-  desc = "put the binary in $PREFIX/bin",
+  desc = "put the binary in $PREFIX/bin, and config/ where it reads it",
   deps = { "build" },
   run = function()
     sh.install("-d", PREFIX .. "/bin")
     sh.install("-m", "0755", BIN, PREFIX .. "/bin/" .. NAME)
     print("installed -> " .. PREFIX .. "/bin/" .. NAME)
+    -- Last, and part of the install rather than a step to remember: a binary newer than
+    -- the config it reads is how a setting that shipped together with it silently does
+    -- nothing. Run alone, `configs` still installs only the config.
+    make.run("configs")
   end,
 }
 
