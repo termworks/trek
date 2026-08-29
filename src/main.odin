@@ -46,6 +46,8 @@ parse_options :: proc(args: []string, default_root: string) -> Options {
 		case "-V", "--version": options.version = true
 		case "-e", "--explore": options.explore = true
 		case "--serve": options.serve = true
+		// The first question when something misbehaves is "is it me or a plugin?".
+		case "--noplugin": luaconfig.set_plugins_enabled(false)
 		case "--lua-api":
 			// The client library on stdout, for a host that can shell out. One that
 			// cannot asks the running trek for it instead, through the `client` verb.
@@ -118,6 +120,7 @@ usage :: proc() {
 	fmt.println("  -e, --explore        start in explorer mode (walk into directories)")
 	fmt.println("      --serve          bind a control socket other programs can query")
 	fmt.println("      --lua-api        print the client library, then exit")
+	fmt.println("      --noplugin       start without running any plugin")
 	fmt.println("      --cwd-file PATH  write the directory trek finished in to PATH")
 	fmt.println("      --preview-shrink N  percent of its width the explorer gives up to a preview")
 	fmt.println("      --width N|N%     viewport columns, or a share of the terminal")

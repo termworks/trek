@@ -51,7 +51,7 @@ trek.on.root(function(ctx)
 end)
 
 
--- Tabs are registered the same way plugins register theirs — see plugins/tags.lua for
+-- Tabs are registered the same way plugins register theirs — see plugin/tags.lua for
 -- one that ships. `when` decides whether the tab belongs in the activity bar at all; it
 -- runs on root changes, so it may do real work.
 

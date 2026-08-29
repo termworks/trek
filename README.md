@@ -250,11 +250,32 @@ looking at disappears, trek falls back to the first one still in the bar.
 
 ### Plugins
 
-A file in `~/.config/trek/plugins/*.lua` is discovered and run automatically. It
-registers what it wants and returns nothing, exactly like `init.lua`:
+trek follows **neovim's model**, which is also [hexe's](https://github.com/bresilla/hexe):
+an ordered path of roots, each laid out the same way inside.
+
+```
+~/.config/trek                 yours
+/etc/xdg/trek                  the system's
+~/.local/share/trek/site       where packages install
+  + site/pack/*/start/*        each one, as its own root
+~/.local/share/trek/runtime    trek's own
+.../after                      the same list, reversed
+```
+
+```
+<root>/
+    plugin/**/*.lua   run at startup, alphabetically, subdirectories included
+    lua/              modules for `require`, never run on their own
+    after/plugin/     run after everything else
+```
+
+**`plugin/` runs, `lua/` is required.** A file under `plugin/` is a statement trek runs
+for you; a file under `lua/` does nothing until something requires it, which is where a
+plugin's helpers go. It registers what it wants and returns nothing, exactly like
+`init.lua`:
 
 ```lua
--- ~/.config/trek/plugins/todo.lua
+-- ~/.config/trek/plugin/todo.lua
 local trek = require("trek")
 
 trek.tab("todo", {
@@ -264,6 +285,28 @@ trek.tab("todo", {
 })
 ```
 
+A plugin is handed its root as `...`, so it can read a file it ships:
+
+```lua
+local root = ...
+local f = io.open(root .. "/data.txt", "r")
+```
+
+**Installing one is putting a directory on the path** — no install command, no manifest,
+no approval. What is there runs, because you put it there.
+
+```sh
+cp -r thing ~/.local/share/trek/site/pack/mine/start/
+```
+
+**`after/plugin/` is the override seam.** Plugins load *after* `init.lua`, as they do in
+neovim, so a line that must win goes in `~/.config/trek/after/plugin/`. That works
+between two plugins as well, which "the config always wins" did not.
+
+When something misbehaves, `trek --noplugin` starts with none of them — `TREK_NOPLUGIN=1`
+does the same for a whole shell. A plugin that raises is reported and the rest still load,
+deliberately unlike `init.lua`, where a raise is fatal.
+
 This repository ships the config it is developed against, in `config/`:
 
 ```sh
@@ -271,7 +314,7 @@ make configs            # config/ -> $XDG_CONFIG_HOME/trek
 make configs --dest DIR # somewhere else
 ```
 
-`config/init.lua` is the settings and keys; `config/plugins/tags.lua` is a worked
+`config/init.lua` is the settings and keys; `config/plugin/tags.lua` is a worked
 plugin — the repository's latest tags, in a tab that is there only inside a repository.
 Each entry is mirrored on its own, so anything else you keep in that directory is left
 where it is.

@@ -1,6 +1,6 @@
 -- The latest tags in this repository, as a tab of their own.
 --
--- Copy to ~/.config/trek/plugins/tags.lua. It registers and returns nothing, so
+-- Copy to ~/.config/trek/plugin/tags.lua. It registers and returns nothing, so
 -- nothing has to be required or merged by hand.
 
 local trek = require("trek")

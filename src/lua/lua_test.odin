@@ -169,27 +169,75 @@ trek.on.root(function(path) __trek_host.reveal(path) end)
 // Rule 4: a fragment registers itself and returns nothing, and the host discovers it.
 // Without this a config that wants somebody else's tab has to require, shape-check and
 // merge a returned table by hand, and every further fragment re-implements that.
+//
+// And the runtimepath's own rules, which are the parts that are easy to get wrong and
+// impossible to notice when they are: `plugin/` runs while `lua/` only answers `require`,
+// order is path order between roots and alphabetical within one, `after/` really is last,
+// a plugin is handed its own root so it can read a file it ships, and one plugin raising
+// does not stop the others.
+//
+// One test rather than several because TREK_C is process-global and the runner is
+// threaded: two tests setting it would race, and the loser would fail for a reason that has
+// nothing to do with what it was checking.
 @(test)
-test_plugins_are_discovered_and_config_wins :: proc(t: ^testing.T) {
+test_plugins_are_discovered_on_the_runtimepath :: proc(t: ^testing.T) {
 	root, err := os.make_directory_temp("", "trek-plugins-*", context.allocator)
 	testing.expect(t, err == nil)
 	defer { _ = os.remove_all(root); delete(root) }
-	plugins, _ := filepath.join([]string{root, "plugins"}, context.allocator)
-	defer delete(plugins)
-	_ = os.make_directory_all(plugins)
 
 	write :: proc(dir, name, body: string) {
 		path, _ := filepath.join([]string{dir, name}, context.allocator)
 		defer delete(path)
 		_ = os.write_entire_file_from_string(path, body)
 	}
+	mkdir :: proc(parts: ..string) -> string {
+		path, _ := filepath.join(parts, context.allocator)
+		_ = os.make_directory_all(path)
+		return path
+	}
+
+	plugin_dir := mkdir(root, "plugin")
+	defer delete(plugin_dir)
+	lua_dir := mkdir(root, "lua")
+	defer delete(lua_dir)
+	after_dir := mkdir(root, "after", "plugin")
+	defer delete(after_dir)
+	legacy_dir := mkdir(root, "plugins")
+	defer delete(legacy_dir)
+	write(legacy_dir, "mine.lua", `local trek = require("trek")
+trek.tab("stale", {rows = function(ctx) return {} end})`)
+
+	// A file the root ships, beside its `plugin/` rather than inside it.
+	write(root, "shipped.txt", "carried along")
+
 	// Sorted by name, so a raise in the middle must not stop the last one.
-	write(plugins, "10-first.lua", `local trek = require("trek")
+	write(plugin_dir, "10-first.lua", `local trek = require("trek")
 trek.tab("first", {rows = function(ctx) return {} end})
 trek.tab("shared", {title = "from the plugin", rows = function(ctx) return {} end})`)
-	write(plugins, "20-broken.lua", `error("deliberately broken")`)
-	write(plugins, "30-last.lua", `local trek = require("trek")
-trek.tab("last", {rows = function(ctx) return {} end})`)
+	write(plugin_dir, "20-broken.lua", `error("deliberately broken")`)
+	write(plugin_dir, "30-last.lua", `local trek = require("trek")
+local helper = require("helper")
+local here = ...
+local f = io.open(here .. "/shipped.txt", "r")
+local shipped = f and f:read("*l") or "NO-SHIPPED-FILE"
+if f then f:close() end
+trek.tab("last", {title = helper.title, rows = function(ctx) return {} end})
+trek.tab("reader", {title = shipped, rows = function(ctx) return {} end})`)
+
+	// Required by a plugin: its body runs because something required it, which is exactly why
+	// it cannot be the file that proves `lua/` is not auto-run.
+	write(lua_dir, "helper.lua", `return {title = "from a lua/ module"}`)
+	// Required by nothing. If `lua/` were auto-run the way `plugin/` is, this would register
+	// a tab -- the only way to tell the two directories apart.
+	write(lua_dir, "never.lua", `local trek = require("trek")
+trek.tab("MUSTNOTRUN", {rows = function(ctx) return {} end})`)
+
+	// `after/` is last however it sorts: `aa` beats every other name alphabetically and must
+	// still get the final word over the plugin that claimed the same tab.
+	write(after_dir, "aa.lua", `local trek = require("trek")
+trek.tab("shared", {title = "from after", rows = function(ctx) return {} end})`)
+
+	// The config names no plugin, and no longer wins by ordering: it runs BEFORE them now.
 	write(root, "init.lua", `local trek = require("trek")
 trek.tab("shared", {title = "from the config", rows = function(ctx) return {} end})`)
 
@@ -209,8 +257,23 @@ trek.tab("shared", {title = "from the config", rows = function(ctx) return {} en
 	// Both sides of the broken plugin loaded.
 	testing.expect(t, "first" in names)
 	testing.expect(t, "last" in names)
-	// The config registered the same name afterwards, so the config's version stands.
-	testing.expect_value(t, names["shared"], "from the config")
+	// `lua/` answered a require, and the file nothing required never ran.
+	testing.expect_value(t, names["last"], "from a lua/ module")
+	testing.expect(t, !("MUSTNOTRUN" in names))
+	// It was handed its own root, so it found a file it ships.
+	testing.expect_value(t, names["reader"], "carried along")
+	// `after/` ran last, over both the plugin and the config.
+	testing.expect_value(t, names["shared"], "from after")
 	// And the failure was reported rather than swallowed or made fatal.
 	testing.expect(t, strings.contains(engine.plugin_error, "20-broken.lua"))
+
+	// The directory plugins used to live in is called out rather than silently ignored: an
+	// upgrade that just stops reading it looks like the plugins broke, and sends somebody
+	// debugging a file that is fine. Said, not supported -- loading it too would be a second
+	// mechanism for one idea.
+	testing.expect(t, !("stale" in names))
+	// Asserted on the notice's own words and on the legacy path: "plugin/" alone would be
+	// satisfied by the broken plugin's own path in the other half of the message.
+	testing.expect(t, strings.contains(engine.plugin_error, "no longer read"))
+	testing.expect(t, strings.contains(engine.plugin_error, legacy_dir))
 }
