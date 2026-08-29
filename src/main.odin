@@ -34,6 +34,51 @@ Options :: struct {
 	error:     string,
 }
 
+
+// `trek plugin list` — the path, and what would run from it.
+//
+// The same words hexe and oslo answer to, because the question is the same one: *is it me or a
+// plugin, and in what order did they run?* Both halves matter — a plugin that is not running is
+// usually in a directory that is not on the path, and one behaving oddly is usually one that another
+// plugin ran before.
+//
+// Guarded on a directory of that name existing, because trek's own argument is a path: somebody with
+// a directory called `plugin` still opens it by typing `trek plugin`, which is trek's actual job.
+plugin_subcommand :: proc(args: []string) -> bool {
+	if len(args) == 0 || args[0] != "plugin" do return false
+	if len(args) > 1 && args[1] != "list" do return false
+	if len(args) > 2 do return false
+	if info, err := os.stat("plugin", context.temp_allocator); err == nil && info.type == .Directory {
+		return false
+	}
+
+	roots := luaconfig.roots(context.temp_allocator)
+	fmt.println("runtimepath")
+	for root in roots {
+		// Saying which of them exist turns "my plugin does not load" into one look: the directory
+		// it is in is usually not on the path at all.
+		there := " "
+		if info, err := os.stat(root.path, context.temp_allocator); err == nil && info.type == .Directory {
+			there = " "
+		} else {
+			there = "-"
+		}
+		fmt.printfln("  %s %s", there, root.path)
+	}
+
+	files := luaconfig.plugin_files(roots, context.temp_allocator)
+	fmt.println("")
+	fmt.println("plugins, in load order")
+	if len(files) == 0 do fmt.println("    none")
+	for file, index in files {
+		fmt.printfln("  % 3d. %s", index + 1, file.path)
+	}
+	fmt.println("")
+	fmt.println("  a `-` marks a directory that is not there; nothing else is needed to install a")
+	fmt.println("  plugin than putting it on this path. `--noplugin` skips them all.")
+	return true
+}
+
 parse_options :: proc(args: []string, default_root: string) -> Options {
 	options := Options{root = default_root}
 	have_root := false
@@ -121,6 +166,9 @@ usage :: proc() {
 	fmt.println("      --serve          bind a control socket other programs can query")
 	fmt.println("      --lua-api        print the client library, then exit")
 	fmt.println("      --noplugin       start without running any plugin")
+	fmt.println("")
+	fmt.println("Commands:")
+	fmt.println("  plugin list          the runtimepath, and the plugins on it, in load order")
 	fmt.println("      --cwd-file PATH  write the directory trek finished in to PATH")
 	fmt.println("      --preview-shrink N  percent of its width the explorer gives up to a preview")
 	fmt.println("      --width N|N%     viewport columns, or a share of the terminal")
@@ -366,6 +414,8 @@ main :: proc() {
 		os.exit(1)
 	}
 	defer delete(cwd)
+	// Before the flags, because it answers and exits rather than opening anything.
+	if plugin_subcommand(os.args[1:]) do return
 	options := parse_options(os.args[1:], cwd)
 	if options.help {
 		usage()

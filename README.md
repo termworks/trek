@@ -303,6 +303,9 @@ cp -r thing ~/.local/share/trek/site/pack/mine/start/
 neovim, so a line that must win goes in `~/.config/trek/after/plugin/`. That works
 between two plugins as well, which "the config always wins" did not.
 
+`trek plugin list` prints the path and every file that would run, in the order it would run
+them. A `-` marks a root that does not exist yet.
+
 When something misbehaves, `trek --noplugin` starts with none of them — `TREK_NOPLUGIN=1`
 does the same for a whole shell. A plugin that raises is reported and the rest still load,
 deliberately unlike `init.lua`, where a raise is fatal.
@@ -310,11 +313,11 @@ deliberately unlike `init.lua`, where a raise is fatal.
 This repository ships the config it is developed against, in `config/`:
 
 ```sh
-make configs            # config/ -> $XDG_CONFIG_HOME/trek
-make configs --dest DIR # somewhere else
+make configs            # config/ -> $XDG_CONFIG_HOME/trek, share/ -> $XDG_DATA_HOME/trek
+make configs --dest DIR # the config somewhere else
 ```
 
-`config/init.lua` is the settings and keys; `config/plugin/tags.lua` is a worked
+`config/init.lua` is the settings and keys; `share/runtime/plugin/tags.lua` is a worked
 plugin — the repository's latest tags, in a tab that is there only inside a repository.
 Each entry is mirrored on its own, so anything else you keep in that directory is left
 where it is.

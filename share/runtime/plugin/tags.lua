@@ -1,7 +1,10 @@
 -- The latest tags in this repository, as a tab of their own.
 --
--- Copy to ~/.config/trek/plugin/tags.lua. It registers and returns nothing, so
--- nothing has to be required or merged by hand.
+-- Shipped in trek's own runtime root, on the same runtimepath your config is on and
+-- by the same rules -- so `after/plugin/tags.lua` in your own config directory
+-- overrides it, and `--noplugin` turns it off with everything else.
+--
+-- It registers and returns nothing, so nothing has to be required or merged by hand.
 
 local trek = require("trek")
 
