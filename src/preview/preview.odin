@@ -308,18 +308,18 @@ while IFS= read -r target; do
   elif [ -f "$target" ]; then
     case "$target" in
       *.png|*.PNG|*.jpg|*.JPG|*.jpeg|*.JPEG|*.gif|*.GIF|*.bmp|*.BMP|*.webp|*.WEBP|*.tiff|*.TIFF|*.ico|*.ICO|*.avif|*.AVIF|*.ppm|*.pgm|*.xpm)
-        # Nothing here is piped through `head`. An image is one enormous escape
+        # Nothing here is piped through 'head'. An image is one enormous escape
         # sequence with no newline in it, so a line cap does not trim the
         # picture -- it cuts the sequence in half and the terminal prints the
-        # tail as base64. `--size` and `c=`/`r=` are what keep it in the float.
+        # tail as base64. '--size' and 'c='/'r=' are what keep it in the float.
         #
-        # `-f kitty` rather than letting chafa choose. Inside a pane TERM is
+        # '-f kitty' rather than letting chafa choose. Inside a pane TERM is
         # xterm-256color and chafa decides from the environment, so left alone
         # it picks half blocks -- a picture drawn out of text when the real
         # thing was available. hexe carries kitty and downgrades it itself if
         # the outer terminal cannot.
         # When it is missing or broken, a PNG still previews: hexe carries PNG
-        # in the Kitty protocol itself, so the fallback is `base64` and nothing
+        # in the Kitty protocol itself, so the fallback is 'base64' and nothing
         # else -- and hexe draws it as half blocks if the outer terminal cannot
         # do graphics. Other formats need the converter.
         if ! chafa -f kitty --size "${cols}x${rows}" -- "$target" 2>/dev/null; then
