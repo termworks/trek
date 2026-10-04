@@ -50,8 +50,8 @@ Tagged releases are cached for `x86_64-linux` and `aarch64-linux`:
 
 ```sh
 cachix use termworks
-nix build --accept-flake-config github:termworks/trek/v0.1.7
-nix run --accept-flake-config github:termworks/trek/v0.1.7 -- --help
+nix build --accept-flake-config github:termworks/trek/v0.1.8
+nix run --accept-flake-config github:termworks/trek/v0.1.8 -- --help
 ```
 
 The cache is `https://termworks.cachix.org`, with public signing key
@@ -60,7 +60,7 @@ Only pushed `v*` tags publish; branch revisions may need compilation.
 Use `make nix-build` and `make nix-check` for local package checks. Starter
 configuration and shared resources are included under `share/trek`.
 
-From another flake, set `inputs.trek.url = "github:termworks/trek/v0.1.7"` and
+From another flake, set `inputs.trek.url = "github:termworks/trek/v0.1.8"` and
 use `trek.packages.${system}.default`. Enable the cache on the consuming machine
 with `cachix use termworks`; input flakes do not apply their `nixConfig`
 automatically.

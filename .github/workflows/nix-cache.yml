@@ -77,15 +77,4 @@ jobs:
             --max-jobs 0 --builders '' .#trek
           result/bin/trek --version
           result/bin/trek --help
-          export HOME="$RUNNER_TEMP/trek-home"
-          export XDG_CONFIG_HOME="$HOME/config"
-          export XDG_STATE_HOME="$HOME/state"
-          mkdir -p "$XDG_CONFIG_HOME" "$XDG_STATE_HOME"
-          (sleep 1; printf 2; sleep .2; printf 3; sleep .2; printf 1;
-            sleep .2; printf '\033[B'; sleep .2; printf m; sleep .2; printf q;
-            sleep .2; printf q) | timeout 30 \
-            script -qefc 'result/bin/trek .' /dev/null > "$RUNNER_TEMP/trek-terminal.log" 2>&1
-          for text in TREK Changes 'Git Graph' NEW Actions; do
-            grep -aF "$text" "$RUNNER_TEMP/trek-terminal.log"
-          done
-          grep -aF $'\033[?1049l' "$RUNNER_TEMP/trek-terminal.log"
+          bash scripts/smoke.sh result/bin/trek
