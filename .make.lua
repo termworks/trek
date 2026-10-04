@@ -272,25 +272,7 @@ make.recipe{
   run = function()
     need("bash", "bash is required for the PTY smoke test")
     need("script", "script from util-linux is required for the PTY smoke test")
-    local scratch = "/tmp/" .. NAME .. "-smoke"
-    local output = scratch .. "/terminal.log"
-    sh.rm("-rf", scratch)
-    sh.mkdir("-p", scratch .. "/config", scratch .. "/state")
-    local command = ("set -o pipefail; " ..
-      "(sleep 1; printf 2; sleep .2; printf 3; sleep .2; printf 1; " ..
-      "sleep .2; printf '\\033[B'; sleep .2; printf m; sleep .2; printf q; sleep .2; printf q) | " ..
-      "env HOME=%q XDG_CONFIG_HOME=%q XDG_STATE_HOME=%q " ..
-      "script -qefc './%s .' /dev/null >%q 2>&1"):format(
-        scratch, scratch .. "/config", scratch .. "/state", BIN, output)
-    assert(oslo.run{ "bash", "-c", command }.ok,
-           "trek exited before delayed terminal input; see " .. output)
-    for _, text in ipairs({ "TREK", "Changes", "Git Graph", "NEW", "Actions" }) do
-      assert(oslo.run{ "grep", "-aF", text, output, capture = true }.ok,
-             "trek did not render " .. text .. "; see " .. output)
-    end
-    assert(oslo.run{ "grep", "-aF", "\27[?1049l", output, capture = true }.ok,
-           "trek did not restore the terminal; see " .. output)
-    sh.rm("-rf", scratch)
+    sh.bash("scripts/smoke.sh", BIN)
   end,
 }
 

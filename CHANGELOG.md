@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.1.8] - 2026-10-04
+
+### <!-- 6 -->🧪 Testing
+
+- Isolate PTY smoke fixture
+
 ## [0.1.7] - 2026-10-04
 
 ### <!-- 1 -->🐛 Bug Fixes
