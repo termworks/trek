@@ -1,0 +1,91 @@
+name: nix-cache
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nix-cache-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.repository == 'termworks/trek' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            system: x86_64-linux
+          - runner: ubuntu-24.04-arm
+            system: aarch64-linux
+    steps:
+      - name: Check publishing credentials
+        env:
+          CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
+        run: |
+          if [ -z "$CACHIX_AUTH_TOKEN" ]; then
+            echo "::error::Add a termworks cache write token as the CACHIX_AUTH_TOKEN Actions secret."
+            exit 1
+          fi
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@b85815f71a6de0ddee80b8a80a98d43f4bcc66c7
+      - uses: cachix/cachix-action@38b082610b782e7e93e209c35fd730d399dee866
+        with:
+          name: termworks
+          skipPush: true
+      - name: Build package and run install checks
+        run: |
+          nix build --accept-flake-config --no-update-lock-file --print-build-logs \
+            --no-link --print-out-paths .#trek > "$RUNNER_TEMP/trek-store-paths"
+      - name: Publish runtime closure and pin release
+        env:
+          CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
+          SYSTEM: ${{ matrix.system }}
+        run: |
+          cachix push termworks < "$RUNNER_TEMP/trek-store-paths"
+          path=$(cat "$RUNNER_TEMP/trek-store-paths")
+          cachix pin termworks "trek-$GITHUB_REF_NAME-$SYSTEM" "$path"
+
+  verify-download:
+    needs: publish
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@b85815f71a6de0ddee80b8a80a98d43f4bcc66c7
+      - uses: cachix/cachix-action@38b082610b782e7e93e209c35fd730d399dee866
+        with:
+          name: termworks
+          skipPush: true
+      - name: Download package without local or remote builders
+        run: |
+          nix build --accept-flake-config --no-update-lock-file \
+            --max-jobs 0 --builders '' .#trek
+          result/bin/trek --version
+          result/bin/trek --help
+          export HOME="$RUNNER_TEMP/trek-home"
+          export XDG_CONFIG_HOME="$HOME/config"
+          export XDG_STATE_HOME="$HOME/state"
+          mkdir -p "$XDG_CONFIG_HOME" "$XDG_STATE_HOME"
+          (sleep 1; printf 2; sleep .2; printf 3; sleep .2; printf 1;
+            sleep .2; printf '\033[B'; sleep .2; printf m; sleep .2; printf q;
+            sleep .2; printf q) | timeout 30 \
+            script -qefc 'result/bin/trek .' /dev/null > "$RUNNER_TEMP/trek-terminal.log" 2>&1
+          for text in TREK Changes 'Git Graph' NEW Actions; do
+            grep -aF "$text" "$RUNNER_TEMP/trek-terminal.log"
+          done
+          grep -aF $'\033[?1049l' "$RUNNER_TEMP/trek-terminal.log"
