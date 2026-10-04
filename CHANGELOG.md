@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.1.6] - 2026-10-04
+
+### <!-- 0 -->⛰️  Features
+
+- Show images, not just text
+- Show images, not just text
+
+### <!-- 1 -->🐛 Bug Fixes
+
+- Backticks ended the script's raw string
+
+### <!-- 7 -->⚙️ Miscellaneous Tasks
+
+- Package trek and cache tagged releases
+
 ## [0.1.5] - 2026-08-29
 
 ### <!-- 0 -->⛰️  Features

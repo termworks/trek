@@ -3,8 +3,8 @@ package preview
 // A preview trek does not draw.
 //
 // trek knows what is selected; hexe knows how to put a second float beside this one.
-// So trek says the path and hexe renders it -- `bat` for a file, `eza` for a directory --
-// and trek never learns what either of those is. Outside hexe nothing here runs and
+// So trek says the path and hexe renders it -- `bat` for a file, `eza` for a directory,
+// `chafa` for a picture -- and trek never learns what any of those is. Outside hexe nothing here runs and
 // nothing else in trek has to check.
 //
 // The channel is a fifo trek holds open for writing. That choice does the cleanup: the
@@ -301,12 +301,42 @@ READER_HEAD :: `#!/bin/sh
 # somewhere in the middle of the file.
 while IFS= read -r target; do
   rows=$(tput lines 2>/dev/null || echo 40)
+  cols=$(tput cols 2>/dev/null || echo 80)
   printf '\033[H\033[2J'
   if [ -d "$target" ]; then
     { eza -la --icons --color=always -- "$target" 2>/dev/null || ls -la -- "$target"; } | head -n "$rows"
   elif [ -f "$target" ]; then
-    { bat --color=always --style=numbers --paging=never --line-range=":$rows" -- "$target" 2>/dev/null \
-      || head -c 100000 -- "$target"; } | head -n "$rows"
+    case "$target" in
+      *.png|*.PNG|*.jpg|*.JPG|*.jpeg|*.JPEG|*.gif|*.GIF|*.bmp|*.BMP|*.webp|*.WEBP|*.tiff|*.TIFF|*.ico|*.ICO|*.avif|*.AVIF|*.ppm|*.pgm|*.xpm)
+        # Nothing here is piped through 'head'. An image is one enormous escape
+        # sequence with no newline in it, so a line cap does not trim the
+        # picture -- it cuts the sequence in half and the terminal prints the
+        # tail as base64. '--size' and 'c='/'r=' are what keep it in the float.
+        #
+        # '-f kitty' rather than letting chafa choose. Inside a pane TERM is
+        # xterm-256color and chafa decides from the environment, so left alone
+        # it picks half blocks -- a picture drawn out of text when the real
+        # thing was available. hexe carries kitty and downgrades it itself if
+        # the outer terminal cannot.
+        # When it is missing or broken, a PNG still previews: hexe carries PNG
+        # in the Kitty protocol itself, so the fallback is 'base64' and nothing
+        # else -- and hexe draws it as half blocks if the outer terminal cannot
+        # do graphics. Other formats need the converter.
+        if ! chafa -f kitty --size "${cols}x${rows}" -- "$target" 2>/dev/null; then
+          case "$target" in
+            *.png|*.PNG)
+              printf '\033_Gf=100,a=T,c=%s,r=%s,C=1;' "$cols" "$rows"
+              base64 -- "$target" | tr -d '\n'
+              printf '\033\\' ;;
+            *)
+              printf 'no preview for %s -- install chafa\n' "${target##*/}"
+              ls -la -- "$target" ;;
+          esac
+        fi ;;
+      *)
+        { bat --color=always --style=numbers --paging=never --line-range=":$rows" -- "$target" 2>/dev/null \
+          || head -c 100000 -- "$target"; } | head -n "$rows" ;;
+    esac
   fi
 done < "`
 READER_TAIL :: `"

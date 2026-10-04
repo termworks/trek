@@ -1,5 +1,10 @@
 {
-  description = "trek Odin development shell";
+  description = "trek terminal file explorer and Git browser";
+
+  nixConfig = {
+    extra-substituters = [ "https://termworks.cachix.org" ];
+    extra-trusted-public-keys = [ "termworks.cachix.org-1:Ty7sSVALfD5ajbcWBIdaNHcaEx3fEmVrOo+rSzy0mvE=" ];
+  };
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs?rev=4c1018dae018162ec878d42fec712642d214fdfa";
@@ -69,6 +74,46 @@
           libxi
           libxrandr
         ];
+
+        trek = pkgs.stdenv.mkDerivation (finalAttrs: {
+          pname = "trek";
+          version = builtins.head (builtins.match ".*VERSION :: \"([^\"]+)\".*" (builtins.readFile ./src/main.odin));
+          src = pkgs.lib.cleanSource ./.;
+          nativeBuildInputs = [ pkgs.odin pkgs.clang ];
+          buildPhase = ''
+            runHook preBuild
+            export HOME=$TMPDIR
+            mkdir -p target
+            mkdir -p "$TMPDIR/odin-libs/nix/store"
+            ln -s ${pkgs.odin} "$TMPDIR/odin-libs${pkgs.odin}"
+            odin build src -out:target/trek -o:speed \
+              -extra-linker-flags:"-static -L$TMPDIR/odin-libs -L${pkgs.glibc.static}/lib"
+            runHook postBuild
+          '';
+          installPhase = ''
+            runHook preInstall
+            install -Dm755 target/trek $out/bin/trek
+            mkdir -p $out/share/trek
+            cp -r config share $out/share/trek/
+            runHook postInstall
+          '';
+          doInstallCheck = true;
+          installCheckPhase = ''
+            runHook preInstallCheck
+            test "$($out/bin/trek --version)" = '${finalAttrs.version}'
+            $out/bin/trek --help
+            if readelf -l $out/bin/trek | grep -q INTERP; then exit 1; fi
+            if readelf -d $out/bin/trek | grep -q NEEDED; then exit 1; fi
+            runHook postInstallCheck
+          '';
+          meta = {
+            description = "Terminal file explorer and Git browser";
+            homepage = "https://github.com/termworks/trek";
+            license = pkgs.lib.licenses.mit;
+            mainProgram = "trek";
+            platforms = pkgs.lib.platforms.linux;
+          };
+        });
       in
       {
         devShells.default = pkgs.mkShell {
@@ -102,6 +147,11 @@
           WGPU_VALIDATION = "0";
           WGPU_DEBUG = "0";
         };
-      }
+      } // (if builtins.elem system [ "x86_64-linux" "aarch64-linux" ] then {
+        packages = { default = trek; inherit trek; };
+        apps.default = { type = "app"; program = "${trek}/bin/trek"; };
+        apps.trek = { type = "app"; program = "${trek}/bin/trek"; };
+        checks.trek = trek;
+      } else {})
     );
 }
