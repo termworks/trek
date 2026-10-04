@@ -42,9 +42,10 @@ make test --package lua --names lua.test_lua_exec_is_a_cached_poll --threads 1
 
 ### Nix binary cache
 
-Only the latest release per package and architecture is protected from cache
-cleanup. Pins use `*-latest-*` with `--keep-revisions 1`; older releases may
-need rebuilding after garbage collection.
+Each package and architecture uses one stable pin, such as
+`trek-x86_64-linux`, with `--keep-revisions 5`. The five newest pin revisions
+are protected from cache cleanup; each binary retains its actual package version.
+Older revisions become eligible for garbage collection and may need rebuilding.
 
 Tagged releases are cached for `x86_64-linux` and `aarch64-linux`:
 

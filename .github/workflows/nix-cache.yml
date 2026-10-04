@@ -52,7 +52,7 @@ jobs:
         run: |
           cachix push termworks < "$RUNNER_TEMP/trek-store-paths"
           path=$(cat "$RUNNER_TEMP/trek-store-paths")
-          cachix pin termworks "trek-latest-$SYSTEM" "$path" --keep-revisions 1
+          cachix pin termworks "trek-$SYSTEM" "$path" --keep-revisions 5
 
   verify-download:
     needs: publish
