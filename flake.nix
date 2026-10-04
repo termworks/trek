@@ -75,11 +75,18 @@
           libxrandr
         ];
 
+        lua54 = pkgs.runCommand "trek-lua54" {} ''
+          mkdir -p $out/lib
+          ln -s ${pkgs.lua5_4}/lib/liblua.a $out/lib/liblua5.4.a
+          ln -s ${pkgs.lua5_4}/lib/liblua.so $out/lib/liblua5.4.so
+        '';
+
         trek = pkgs.stdenv.mkDerivation (finalAttrs: {
           pname = "trek";
           version = builtins.head (builtins.match ".*VERSION :: \"([^\"]+)\".*" (builtins.readFile ./src/main.odin));
           src = pkgs.lib.cleanSource ./.;
           nativeBuildInputs = [ pkgs.odin pkgs.clang ];
+          buildInputs = [ lua54 ];
           buildPhase = ''
             runHook preBuild
             export HOME=$TMPDIR
@@ -119,6 +126,7 @@
         devShells.default = pkgs.mkShell {
           packages = [
             pkgs.odin
+            lua54
             pkgs.git-cliff
             pkgs.clang
             pkgs.mold
