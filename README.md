@@ -42,12 +42,16 @@ make test --package lua --names lua.test_lua_exec_is_a_cached_poll --threads 1
 
 ### Nix binary cache
 
+Only the latest release per package and architecture is protected from cache
+cleanup. Pins use `*-latest-*` with `--keep-revisions 1`; older releases may
+need rebuilding after garbage collection.
+
 Tagged releases are cached for `x86_64-linux` and `aarch64-linux`:
 
 ```sh
 cachix use termworks
-nix build --accept-flake-config github:termworks/trek/v0.1.6
-nix run --accept-flake-config github:termworks/trek/v0.1.6 -- --help
+nix build --accept-flake-config github:termworks/trek/v0.1.7
+nix run --accept-flake-config github:termworks/trek/v0.1.7 -- --help
 ```
 
 The cache is `https://termworks.cachix.org`, with public signing key
@@ -56,7 +60,7 @@ Only pushed `v*` tags publish; branch revisions may need compilation.
 Use `make nix-build` and `make nix-check` for local package checks. Starter
 configuration and shared resources are included under `share/trek`.
 
-From another flake, set `inputs.trek.url = "github:termworks/trek/v0.1.6"` and
+From another flake, set `inputs.trek.url = "github:termworks/trek/v0.1.7"` and
 use `trek.packages.${system}.default`. Enable the cache on the consuming machine
 with `cachix use termworks`; input flakes do not apply their `nixConfig`
 automatically.

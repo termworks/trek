@@ -45,20 +45,17 @@ jobs:
         run: |
           set -euo pipefail
           tag='${{ inputs.tag || github.ref_name }}'
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
-          echo "name=trek-${tag#v}-${{ matrix.target }}" >> "$GITHUB_OUTPUT"
+          {
+            echo "tag=$tag"
+            echo "version=${tag#v}"
+            echo "name=trek-${tag#v}-${{ matrix.target }}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Build
-        # VERSION is the tag without its `v`, exported so a build that stamps its own version has
-        # the one being released rather than whatever the working tree last said.
-        env:
-          VERSION: ${{ steps.meta.outputs.version }}
         run: |
-          nix develop --impure --command bash -c '
-            set -euo pipefail
-            mkdir -p target
-            odin build src -out:target/trek -o:speed'
+          nix build --accept-flake-config --no-update-lock-file --print-build-logs .#trek
+          mkdir -p target
+          cp result/bin/trek target/trek
 
       - name: Package
         run: |
