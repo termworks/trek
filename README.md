@@ -43,27 +43,27 @@ make test --package lua --names lua.test_lua_exec_is_a_cached_poll --threads 1
 ### Nix binary cache
 
 Each package and architecture uses one stable pin, such as
-`trek-x86_64-linux`, with `--keep-revisions 5`. The five newest pin revisions
-are protected from cache cleanup; each binary retains its actual package version.
-Older revisions become eligible for garbage collection and may need rebuilding.
+`trek-x86_64-linux`, listed at <https://cache.bresilla.com/-/pins>. The pinned
+build is protected from cache cleanup; each binary retains its actual package
+version. Builds that are no longer pinned are removed and may need rebuilding.
 
 Tagged releases are cached for `x86_64-linux` and `aarch64-linux`:
 
 ```sh
-cachix use termworks
 nix build --accept-flake-config github:termworks/trek/v0.1.8
 nix run --accept-flake-config github:termworks/trek/v0.1.8 -- --help
 ```
 
-The cache is `https://termworks.cachix.org`, with public signing key
-`termworks.cachix.org-1:Ty7sSVALfD5ajbcWBIdaNHcaEx3fEmVrOo+rSzy0mvE=`.
+The cache is `https://cache.bresilla.com/bresilla`, with public signing key
+`bresilla:zsecaZYIrjCJQS4AuGPmEVU5PRkiMmB/Mds3KaCzTvE=`.
 Only pushed `v*` tags publish; branch revisions may need compilation.
 Use `make nix-build` and `make nix-check` for local package checks. Starter
 configuration and shared resources are included under `share/trek`.
 
 From another flake, set `inputs.trek.url = "github:termworks/trek/v0.1.8"` and
 use `trek.packages.${system}.default`. Enable the cache on the consuming machine
-with `cachix use termworks`; input flakes do not apply their `nixConfig`
+by adding `extra-substituters` and `extra-trusted-public-keys` with the values
+above to `/etc/nix/nix.conf`; input flakes do not apply their `nixConfig`
 automatically.
 
 ## Usage
